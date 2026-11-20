@@ -366,7 +366,6 @@ class LinkController(
                 return@launch
             }
             identity = Identity(current.deviceId, current.deviceName, role)
-            withMain { transport.stopSession() }
             resetSession(if (asHost) LinkPhase.ADVERTISING else LinkPhase.DISCOVERING)
             this@LinkController.isHost = asHost
             localNonce = PairingCode.newNonce()

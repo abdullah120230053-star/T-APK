@@ -20,7 +20,7 @@ Use JDK 17, Android SDK platform 36, and Gradle 8.13. Set `sdk.dir` in a local `
 adb -s <serial> install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-On the project Windows machine, `.\gradw.bat` uses the preinstalled Gradle distribution and defaults to the Zulu JDK 17 path in [AGENTS.md](AGENTS.md). Repeat installation for the other device. Tahany 0.2.0 uses protocol version 2, so update both devices before pairing.
+On the project Windows machine, `.\gradw.bat` uses the preinstalled Gradle distribution and defaults to the Zulu JDK 17 path in [AGENTS.md](AGENTS.md). Repeat installation for the other device. Install the current build on both devices to get the same pairing behavior. See the [setup guide](setup/README.md) for installation and retry steps.
 
 ## Hardware acceptance
 
@@ -29,6 +29,18 @@ Google Play services must be enabled on both devices. Nearby chooses the transpo
 Check [TASKS.md](TASKS.md) for the real-device gates, including background operation, transfers over Wi-Fi and hotspot, call controls, notifications, and sustained screen mirroring. Release builds require the project owner's Android signing key.
 
 Tahany uses public Android APIs and has no Tahany account, cloud relay, or analytics service. Pairing uses the Nearby session authentication token to bind the compared code. [Nearby Connections data exchange](https://developers.google.com/nearby/connections/android/exchange-data) · [Android media projection](https://developer.android.com/media/grow/media-projection)
+
+## HONOR Connect feature coverage
+
+| HONOR Connect feature | Tahany on Redmi and Honor Pad |
+| --- | --- |
+| File transfer | Bidirectional file sharing between devices running Tahany |
+| Connected notifications | Phone notifications and supported inline replies on the tablet |
+| Screen sharing and connected input | Phone screen mirroring and optional remote touch. Keyboard and mouse sharing, drag-and-drop, and moving app windows are outside current coverage. |
+| Connected calls | Call alerts and available phone-side controls. Voice audio stays on the phone or headset. |
+| Connected apps, camera, network sharing, Global Favorites, and system gestures | Outside current coverage. HONOR's original integrations rely on supported devices and system features. |
+
+See [HONOR Connect's feature list](https://www.honor.com/ph/tech/connect/) and [Tahany's hardware acceptance gates](TASKS.md).
 
 
 ## Project history

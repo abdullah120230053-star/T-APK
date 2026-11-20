@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import com.dama.tahany.files.MAX_TRANSFER_BYTES
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.AdvertisingOptions
 import com.google.android.gms.nearby.connection.ConnectionInfo
@@ -291,6 +292,20 @@ class NearbyTransport(
     }
 
     private fun fail(message: String, error: Throwable? = null) {
-        emit(TransportEvent.Failure(message, error))
+        if (error == null) {
+            emit(TransportEvent.Failure(message))
+            return
+        }
+        val status = (error as? ApiException)?.statusCode
+        val advice = when (status) {
+            8029, 8037, 8038, 8039 -> "Allow Nearby devices in Android app permissions."
+            8034, 8036 -> "Allow Location in Android app permissions."
+            8025 -> "Turn on Location in Android settings."
+            8007 -> "Turn on Bluetooth and Wi-Fi, then try again."
+            8001, 8002, 8008, 8050 -> "Close other nearby sharing sessions, then try again."
+            else -> "Check Bluetooth, Wi-Fi and Nearby devices permissions."
+        }
+        val detail = if (status == null) message else "$message (Nearby $status)"
+        emit(TransportEvent.Failure("$detail. $advice", error))
     }
 }

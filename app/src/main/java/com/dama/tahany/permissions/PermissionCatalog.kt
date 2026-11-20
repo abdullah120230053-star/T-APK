@@ -72,7 +72,7 @@ object PermissionCatalog {
         } else {
             add(
                 PermissionItem(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    if (api >= 29) permission.ACCESS_FINE_LOCATION else permission.ACCESS_COARSE_LOCATION,
                     "Location",
                     "Android 12 and below require location for nearby discovery.",
                 ),
@@ -146,6 +146,7 @@ object PermissionCatalog {
         permission.BLUETOOTH_CONNECT,
         permission.NEARBY_WIFI_DEVICES,
         permission.ACCESS_FINE_LOCATION,
+        permission.ACCESS_COARSE_LOCATION,
     )
 }
 
