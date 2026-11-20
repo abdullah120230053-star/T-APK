@@ -182,6 +182,44 @@ sealed class TahanyMessage {
     ) : TahanyMessage()
 
     @Serializable
+    @SerialName("screencast_offer")
+    data class ScreenCastOffer(
+        override val v: Int = PROTOCOL_VERSION,
+        override val id: String = newMessageId(),
+        val width: Int = 1280,
+        val height: Int = 720,
+        val fps: Int = 30,
+        val bitrate: Int = 2_500_000,
+    ) : TahanyMessage()
+
+    @Serializable
+    @SerialName("screencast_answer")
+    data class ScreenCastAnswer(
+        override val v: Int = PROTOCOL_VERSION,
+        override val id: String = newMessageId(),
+        val accepted: Boolean,
+        val reason: String? = null,
+    ) : TahanyMessage()
+
+    @Serializable
+    @SerialName("screencast_stop")
+    data class ScreenCastStop(
+        override val v: Int = PROTOCOL_VERSION,
+        override val id: String = newMessageId(),
+        val reason: String? = null,
+    ) : TahanyMessage()
+
+    @Serializable
+    @SerialName("touch_event")
+    data class TouchEvent(
+        override val v: Int = PROTOCOL_VERSION,
+        override val id: String = newMessageId(),
+        val xRatio: Float,
+        val yRatio: Float,
+        val action: Int,
+    ) : TahanyMessage()
+
+    @Serializable
     @SerialName("ping")
     data class Ping(
         override val v: Int = PROTOCOL_VERSION,

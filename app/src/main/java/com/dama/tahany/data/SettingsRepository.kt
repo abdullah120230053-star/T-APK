@@ -29,6 +29,17 @@ class SettingsRepository(private val context: Context) {
         val AUTO_SCREENSHOT = booleanPreferencesKey("auto_screenshot")
         val WIFI_ONLY = booleanPreferencesKey("wifi_only")
         val TRUSTED_PEERS = stringSetPreferencesKey("trusted_peers")
+        val BLOCKED_PACKAGES = stringSetPreferencesKey("blocked_packages")
+    }
+
+    companion object {
+        val DEFAULT_BLOCKED_PACKAGES = setOf(
+            "com.google.android.apps.authenticator2",
+            "com.authenticator.authservice2",
+            "com.onepassword.android",
+            "com.x8bit.bitwarden",
+            "keepass2android.keepass2android",
+        )
     }
 
     val settings: Flow<AppSettings> = context.tahanyDataStore.data
@@ -92,6 +103,19 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun isTrusted(deviceId: String): Boolean = current().trustedPeers.any { it.deviceId == deviceId }
 
+    suspend fun setPackageBlocked(packageName: String, blocked: Boolean) {
+        context.tahanyDataStore.edit { preferences ->
+            val current = preferences[Keys.BLOCKED_PACKAGES] ?: DEFAULT_BLOCKED_PACKAGES
+            val updated = if (blocked) current + packageName else current - packageName
+            preferences[Keys.BLOCKED_PACKAGES] = updated
+        }
+    }
+
+    suspend fun isPackageBlocked(packageName: String): Boolean {
+        val current = current().blockedPackages
+        return current.contains(packageName)
+    }
+
     private fun toSettings(preferences: Preferences): AppSettings = AppSettings(
         role = preferences[Keys.ROLE]?.let { runCatching { DeviceRole.valueOf(it) }.getOrNull() },
         deviceId = preferences[Keys.DEVICE_ID].orEmpty(),
@@ -99,6 +123,7 @@ class SettingsRepository(private val context: Context) {
         autoScreenshot = preferences[Keys.AUTO_SCREENSHOT] ?: true,
         wifiOnly = preferences[Keys.WIFI_ONLY] ?: false,
         trustedPeers = readPeers(preferences).mapNotNull(TrustedPeerCodec::decode),
+        blockedPackages = preferences[Keys.BLOCKED_PACKAGES] ?: DEFAULT_BLOCKED_PACKAGES,
     )
 
     private fun readPeers(preferences: Preferences): List<String> =

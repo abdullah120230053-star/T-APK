@@ -5,9 +5,16 @@
     <string name="notification_channel_service">Link service</string>
     <string name="notification_channel_transfers">Transfers</string>
     <string name="notification_channel_incoming">Incoming</string>
+    <string name="notification_channel_mirrored">Phone notifications</string>
+    <string name="notification_channel_calls">Incoming calls</string>
     <string name="notification_service_title">Tahany link is ready</string>
     <string name="notification_service_text">Open Tahany to host or join a session.</string>
     <string name="notification_stop">Stop</string>
     <string name="notification_copy">Copy</string>
     <string name="notification_open">Open</string>
+    <string name="notification_answer">Answer</string>
+    <string name="notification_decline">Decline</string>
+    <string name="notification_speaker">Speaker</string>
+    <string name="notification_reply">Reply</string>
+    <string name="accessibility_description">Allows Tahany to inject touch gestures onto your phone screen when controlled remotely from your paired Honor Pad tablet.</string>
 </resources>

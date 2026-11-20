@@ -2,15 +2,21 @@ package com.dama.tahany.link
 
 import android.content.Context
 import com.dama.tahany.data.SettingsRepository
+import com.dama.tahany.model.ActiveCallState
 import com.dama.tahany.model.DeviceRole
 import com.dama.tahany.model.FoundPeer
 import com.dama.tahany.model.LinkPhase
 import com.dama.tahany.model.LinkUiState
+import com.dama.tahany.model.MirroredNotification
 import com.dama.tahany.model.PeerInfo
+import com.dama.tahany.model.ScreenCastPhase
+import com.dama.tahany.model.ScreenCastState
 import com.dama.tahany.model.TransferDirection
 import com.dama.tahany.model.TransferState
 import com.dama.tahany.model.TransferStatus
 import com.dama.tahany.model.TrustedPeer
+import com.dama.tahany.protocol.CallAction
+import com.dama.tahany.protocol.CallState
 import com.dama.tahany.protocol.PROTOCOL_VERSION
 import com.dama.tahany.protocol.PairingCode
 import com.dama.tahany.protocol.ProtocolCodec
@@ -52,6 +58,15 @@ sealed interface LinkEvent {
         val size: Long,
         val takenAt: Long,
     ) : LinkEvent
+
+    data class NotificationReceived(val event: TahanyMessage.NotificationEvent) : LinkEvent
+    data class NotificationReplyReceived(val key: String, val text: String) : LinkEvent
+    data class CallEventReceived(val event: TahanyMessage.CallEvent) : LinkEvent
+    data class CallCommandReceived(val command: TahanyMessage.CallCommand) : LinkEvent
+    data class ScreenCastOfferReceived(val offer: TahanyMessage.ScreenCastOffer) : LinkEvent
+    data class ScreenCastAnswerReceived(val answer: TahanyMessage.ScreenCastAnswer) : LinkEvent
+    data class ScreenCastStopReceived(val stop: TahanyMessage.ScreenCastStop) : LinkEvent
+    data class TouchEventReceived(val touch: TahanyMessage.TouchEvent) : LinkEvent
 
     data class Notice(val message: String) : LinkEvent
     data class Problem(val message: String) : LinkEvent
@@ -272,6 +287,65 @@ class LinkController(
         }
     }
 
+    fun sendNotification(event: TahanyMessage.NotificationEvent) {
+        if (!isConnected()) return
+        send(event)
+    }
+
+    fun sendNotificationReply(key: String, text: String) {
+        if (!isConnected()) return
+        send(TahanyMessage.NotificationReply(key = key, text = text))
+    }
+
+    fun sendCallEvent(event: TahanyMessage.CallEvent) {
+        if (!isConnected()) return
+        send(event)
+    }
+
+    fun sendCallCommand(action: CallAction) {
+        if (!isConnected()) return
+        send(TahanyMessage.CallCommand(action = action))
+    }
+
+    fun sendScreenCastOffer(width: Int = 1280, height: Int = 720) {
+        if (!isConnected()) return
+        _state.update {
+            it.copy(
+                screenCast = ScreenCastState(
+                    phase = ScreenCastPhase.STARTING,
+                    isSharing = true,
+                    width = width,
+                    height = height,
+                ),
+            )
+        }
+        send(TahanyMessage.ScreenCastOffer(width = width, height = height))
+    }
+
+    fun sendScreenCastAnswer(accepted: Boolean, reason: String? = null) {
+        if (!isConnected()) return
+        send(TahanyMessage.ScreenCastAnswer(accepted = accepted, reason = reason))
+    }
+
+    fun sendScreenCastStop(reason: String? = null) {
+        if (!isConnected()) return
+        _state.update {
+            it.copy(screenCast = ScreenCastState(phase = ScreenCastPhase.IDLE))
+        }
+        send(TahanyMessage.ScreenCastStop(reason = reason))
+    }
+
+    fun sendTouchEvent(xRatio: Float, yRatio: Float, action: Int) {
+        if (!isConnected()) return
+        send(TahanyMessage.TouchEvent(xRatio = xRatio, yRatio = yRatio, action = action))
+    }
+
+    fun updateSpeakerState(isSpeakerOn: Boolean) {
+        _state.update { current ->
+            current.copy(activeCall = current.activeCall?.copy(isSpeakerOn = isSpeakerOn))
+        }
+    }
+
     fun disconnect() {
         handshakeTimeout?.cancel()
         endpointId?.let { transport.disconnect(it) }
@@ -445,11 +519,76 @@ class LinkController(
                 }
             }
 
-            is TahanyMessage.NotificationEvent -> emit(LinkEvent.Notice("Notification: ${message.title}"))
-            is TahanyMessage.NotificationReply -> Unit
+            is TahanyMessage.NotificationEvent -> {
+                _state.update { current ->
+                    val item = MirroredNotification(
+                        key = message.key,
+                        packageName = message.packageName,
+                        appLabel = message.appLabel,
+                        title = message.title,
+                        text = message.text,
+                        postedAt = message.postedAt,
+                        hasReply = message.hasReply,
+                    )
+                    current.copy(
+                        mirroredNotifications = (listOf(item) + current.mirroredNotifications.filterNot { it.key == item.key }).take(50),
+                    )
+                }
+                emit(LinkEvent.NotificationReceived(message))
+            }
+
+            is TahanyMessage.NotificationReply -> emit(LinkEvent.NotificationReplyReceived(message.key, message.text))
             is TahanyMessage.NotificationAction -> Unit
-            is TahanyMessage.CallEvent -> emit(LinkEvent.Notice("Call: ${message.state}"))
-            is TahanyMessage.CallCommand -> Unit
+
+            is TahanyMessage.CallEvent -> {
+                _state.update { current ->
+                    val callState = if (message.state == CallState.IDLE) null else ActiveCallState(
+                        state = message.state,
+                        number = message.number,
+                        contactName = message.contactName,
+                    )
+                    current.copy(activeCall = callState)
+                }
+                emit(LinkEvent.CallEventReceived(message))
+            }
+
+            is TahanyMessage.CallCommand -> emit(LinkEvent.CallCommandReceived(message))
+
+            is TahanyMessage.ScreenCastOffer -> {
+                _state.update { current ->
+                    current.copy(
+                        screenCast = ScreenCastState(
+                            phase = ScreenCastPhase.RECEIVING,
+                            isReceiving = true,
+                            width = message.width,
+                            height = message.height,
+                        ),
+                    )
+                }
+                emit(LinkEvent.ScreenCastOfferReceived(message))
+            }
+
+            is TahanyMessage.ScreenCastAnswer -> {
+                _state.update { current ->
+                    current.copy(
+                        screenCast = if (message.accepted) {
+                            current.screenCast.copy(phase = ScreenCastPhase.STREAMING, isSharing = true)
+                        } else {
+                            current.screenCast.copy(phase = ScreenCastPhase.ERROR, error = message.reason)
+                        },
+                    )
+                }
+                emit(LinkEvent.ScreenCastAnswerReceived(message))
+            }
+
+            is TahanyMessage.ScreenCastStop -> {
+                _state.update { current ->
+                    current.copy(screenCast = ScreenCastState(phase = ScreenCastPhase.IDLE))
+                }
+                emit(LinkEvent.ScreenCastStopReceived(message))
+            }
+
+            is TahanyMessage.TouchEvent -> emit(LinkEvent.TouchEventReceived(message))
             is TahanyMessage.Ping -> send(TahanyMessage.Pong(timestamp = message.timestamp))
             is TahanyMessage.Pong -> Unit
             is TahanyMessage.ErrorMessage -> _state.update {
