@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Tahany</string>
+    <string name="tile_clipboard">Send clipboard</string>
+    <string name="notification_channel_service">Link service</string>
+    <string name="notification_channel_transfers">Transfers</string>
+    <string name="notification_channel_incoming">Incoming</string>
+    <string name="notification_service_title">Tahany link is ready</string>
+    <string name="notification_service_text">Open Tahany to host or join a session.</string>
+    <string name="notification_stop">Stop</string>
+    <string name="notification_copy">Copy</string>
+    <string name="notification_open">Open</string>
+</resources>

@@ -1,0 +1,28 @@
+# Android / Gradle
+.gradle/
+.gradle-home/
+.android-home/
+.kotlin/
+build/
+app/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Local toolchain and recovery
+.toolchain/
+*-recovery/
+*.probe
+H.class
+H.java
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Signing material — never commit this
+*.jks
+*.keystore
+keystore.properties
