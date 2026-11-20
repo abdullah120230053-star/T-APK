@@ -7,26 +7,17 @@ account, no cloud relay.
 The feature plan lives in [`Tahany — Honor Pad X9a ↔ Redmi Link App Plan.md`](<Tahany — Honor Pad X9a ↔ Redmi Link App Plan.md>).
 The concrete build backlog and release gates live in [`TASKS.md`](TASKS.md).
 
-## What v1 does
+## Features (v1 to v4)
 
-- Choose **Phone** or **Tablet** on first run; the choice is stored locally.
-- Host on one device, join on the other through Nearby Connections.
-- Show the same six-digit short authentication string on both screens; no data
-  moves until both users confirm it.
-- Send files from either share sheet; received files go to
-  `Pictures/Tahany` (images) or `Downloads/Tahany` (everything else).
-- Send the clipboard with a button or the quick-settings tile. Automatic
-  clipboard sync runs only while the app is in the foreground.
-- Watch `Pictures/Screenshots` both ways and save incoming screenshots into
-  `Pictures/Tahany`. A SHA-256 ledger stops echoes and duplicates.
-- Keep the link in a `connectedDevice` foreground service, restart it after
-  boot, and show a visible notification while it runs.
-- Guide the user through Xiaomi/HyperOS Autostart and Honor battery settings.
-  These are deep links with safe fallbacks; Android has no public setter for
-  Autostart.
-
-Notification mirroring, calls, and screen mirroring are deliberately not in
-v1. Their tasks and gates are in `TASKS.md`.
+- **Role Selection:** Choose **Phone** or **Tablet** on first run; the choice is stored locally.
+- **Link & Pairing:** Host on one device, join on the other through Nearby Connections with a 6-digit SAS confirmation code (HMAC-SHA256).
+- **File Transfer:** Send files from either share sheet; received files go to `Pictures/Tahany` (images) or `Downloads/Tahany` (everything else).
+- **Clipboard Sync:** Send clipboard via in-app button or the Quick Settings tile (`ClipboardTileService`). Auto-sync runs while foregrounded.
+- **Bidirectional Screenshot Sync:** Watches `Pictures/Screenshots` both ways, saves incoming screenshots to `Pictures/Tahany`, protected by a bounded SHA-256 loop guard.
+- **Notification Mirroring & Replies (v2):** `TahanyNotificationListenerService` mirrors phone notifications to the tablet with app badges. Direct inline replies typed on the tablet are dispatched back to the phone via `RemoteInput`. Sensitive apps (banking, 2FA authenticators, password managers) are filtered by default.
+- **Call Alerts & Remote Control (v3):** `CallMonitor` detects phone ringing states and caller ID/contacts. The tablet displays a heads-up and full-screen incoming call card with **Answer**, **Decline**, and **Speakerphone** controls executed remotely via `TelecomManager` and `AudioManager`. (Clear reminder: voice audio stays on the phone/headset).
+- **Screen Mirroring & Remote Touch (v4):** Phone captures screen via `MediaProjection` (with Android 14+ `mediaProjection` FGS), encodes in H.264 (720p @ 30fps) with `MediaCodec`, and streams over the link. Tablet decodes directly to a Surface. Optional `TahanyAccessibilityService` injects touch taps and swipes sent from the tablet.
+- **OEM Background Survival:** `connectedDevice` foreground service avoids Android 15's 6-hour `dataSync` timeout. Includes built-in deep links for HyperOS/MIUI Autostart, battery restrictions, and Honor MagicOS App Launch.
 
 ## Build
 

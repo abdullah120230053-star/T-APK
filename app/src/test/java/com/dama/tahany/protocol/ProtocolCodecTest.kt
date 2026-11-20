@@ -99,4 +99,74 @@ class ProtocolCodecTest {
     fun invalidInputReturnsNullThroughSafeDecoder() {
         assertNull(ProtocolCodec.decodeOrNull("not json".toByteArray()))
     }
+
+    @Test
+    fun notificationEventAndReplyRoundTrip() {
+        val event = TahanyMessage.NotificationEvent(
+            key = "0|com.whatsapp|1|null|1000",
+            packageName = "com.whatsapp",
+            appLabel = "WhatsApp",
+            title = "John Doe",
+            text = "Are you available?",
+            postedAt = 1700000000L,
+            hasReply = true,
+            canOpen = true,
+        )
+
+        val decodedEvent = ProtocolCodec.decode(ProtocolCodec.encode(event)) as TahanyMessage.NotificationEvent
+        assertEquals("com.whatsapp", decodedEvent.packageName)
+        assertEquals("WhatsApp", decodedEvent.appLabel)
+        assertEquals("Are you available?", decodedEvent.text)
+        assertTrue(decodedEvent.hasReply)
+
+        val reply = TahanyMessage.NotificationReply(
+            key = event.key,
+            text = "Yes, calling now!",
+        )
+        val decodedReply = ProtocolCodec.decode(ProtocolCodec.encode(reply)) as TahanyMessage.NotificationReply
+        assertEquals(event.key, decodedReply.key)
+        assertEquals("Yes, calling now!", decodedReply.text)
+    }
+
+    @Test
+    fun callEventAndCommandRoundTrip() {
+        val event = TahanyMessage.CallEvent(
+            state = CallState.RINGING,
+            number = "+15550192834",
+            contactName = "Mom",
+            timestamp = 1700000000L,
+        )
+
+        val decodedEvent = ProtocolCodec.decode(ProtocolCodec.encode(event)) as TahanyMessage.CallEvent
+        assertEquals(CallState.RINGING, decodedEvent.state)
+        assertEquals("+15550192834", decodedEvent.number)
+        assertEquals("Mom", decodedEvent.contactName)
+
+        val command = TahanyMessage.CallCommand(action = CallAction.ANSWER)
+        val decodedCommand = ProtocolCodec.decode(ProtocolCodec.encode(command)) as TahanyMessage.CallCommand
+        assertEquals(CallAction.ANSWER, decodedCommand.action)
+    }
+
+    @Test
+    fun screenCastAndTouchRoundTrip() {
+        val offer = TahanyMessage.ScreenCastOffer(
+            width = 1920,
+            height = 1080,
+            fps = 30,
+            bitrate = 4_000_000,
+        )
+        val decodedOffer = ProtocolCodec.decode(ProtocolCodec.encode(offer)) as TahanyMessage.ScreenCastOffer
+        assertEquals(1920, decodedOffer.width)
+        assertEquals(1080, decodedOffer.height)
+
+        val touch = TahanyMessage.TouchEvent(
+            xRatio = 0.5f,
+            yRatio = 0.8f,
+            action = 0,
+        )
+        val decodedTouch = ProtocolCodec.decode(ProtocolCodec.encode(touch)) as TahanyMessage.TouchEvent
+        assertEquals(0.5f, decodedTouch.xRatio, 0.001f)
+        assertEquals(0.8f, decodedTouch.yRatio, 0.001f)
+        assertEquals(0, decodedTouch.action)
+    }
 }

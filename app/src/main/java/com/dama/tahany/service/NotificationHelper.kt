@@ -299,6 +299,4 @@ object NotificationHelper {
 
     private fun pendingFlags(): Int =
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-
-    private const val INCOMING_ID_BASE = 3000
 }

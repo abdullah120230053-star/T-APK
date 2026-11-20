@@ -103,6 +103,33 @@ class TahanyViewModel(application: Application) : AndroidViewModel(application) 
         controller.value?.disconnect()
     }
 
+    fun answerCall() {
+        controller.value?.sendCallCommand(com.dama.tahany.protocol.CallAction.ANSWER)
+    }
+
+    fun declineCall() {
+        controller.value?.sendCallCommand(com.dama.tahany.protocol.CallAction.DECLINE)
+    }
+
+    fun toggleSpeaker() {
+        val currentSpeaker = linkState.value.activeCall?.isSpeakerOn ?: false
+        val nextAction = if (currentSpeaker) com.dama.tahany.protocol.CallAction.SPEAKER_OFF else com.dama.tahany.protocol.CallAction.SPEAKER_ON
+        controller.value?.sendCallCommand(nextAction)
+        controller.value?.updateSpeakerState(!currentSpeaker)
+    }
+
+    fun replyNotification(key: String, text: String) {
+        controller.value?.sendNotificationReply(key, text)
+    }
+
+    fun startScreenCast(width: Int = 1280, height: Int = 720) {
+        controller.value?.sendScreenCastOffer(width, height)
+    }
+
+    fun stopScreenCast() {
+        controller.value?.sendScreenCastStop()
+    }
+
     fun sendClipboard() {
         controller.value?.sendClipboard(readClipboard() ?: "")
     }

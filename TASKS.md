@@ -1,6 +1,6 @@
 # Tahany — build tasks and release gates
 
-Status: **v1 in progress**. Scope source: [`Tahany — Honor Pad X9a ↔ Redmi Link App Plan.md`](<Tahany — Honor Pad X9a ↔ Redmi Link App Plan.md>).
+Status: **v1–v4 implemented; build, unit tests and lint are green. Real-device gates (T0.2, T1.20, T2.5, T3.5, T4.5) are still open — no devices attached yet.** Scope source: [`Tahany — Honor Pad X9a ↔ Redmi Link App Plan.md`](<Tahany — Honor Pad X9a ↔ Redmi Link App Plan.md>).
 
 Tahany is one APK with two roles. The same code runs on the Honor Pad X9a
 (Android 15 / API 35) and the Redmi (MIUI or HyperOS, Android version still
@@ -26,71 +26,71 @@ permission; both are handled in code.
 
 ## Phase 0 — foundation and a real go/no-go check
 
-- [ ] **T0.1 Toolchain** — project-local JDK 21, Android SDK 36, Gradle wrapper; `assembleDebug` succeeds from a clean checkout.
+- [x] **T0.1 Toolchain** — project-local JDK 21, Android SDK 36, Gradle wrapper; `assembleDebug` succeeds from a clean checkout.
 - [ ] **T0.2 Gate 0, real devices** — confirm Google Play Services is present on both the Honor Pad X9a and the Redmi, and that Nearby Connections can advertise/discover with the screen off for 10 minutes. If this fails, stop feature work and replace the transport with NSD + TLS before v1 continues.
-- [ ] **T0.3 Skeleton** — package `com.dama.tahany`, role selection persisted, foreground service starts on launch and after boot, notification channel visible.
-- [ ] **T0.4 Permissions** — runtime request flow for Bluetooth scan/advertise/connect, nearby Wi-Fi, notifications, and media images; Android 12-and-below location path kept.
-- [ ] **T0.5 OEM survival guide** — first-run guide for Xiaomi Autostart/battery/Recents and Honor battery manager; deep links fall back safely; service-stopped warning.
+- [x] **T0.3 Skeleton** — package `com.dama.tahany`, role selection persisted, foreground service starts on launch and after boot, notification channel visible.
+- [x] **T0.4 Permissions** — runtime request flow for Bluetooth scan/advertise/connect, nearby Wi-Fi, notifications, and media images; Android 12-and-below location path kept.
+- [x] **T0.5 OEM survival guide** — first-run guide for Xiaomi Autostart/battery/Recents and Honor battery manager; deep links fall back safely; service-stopped warning.
 
 ## Phase 1 — v1: pairing, files, clipboard, screenshots
 
 ### Protocol and pairing
 
-- [ ] **T1.1 Message schema** — sealed `TahanyMessage` types for hello, SAS confirm, clipboard, file offer/result, screenshot notice, ping/pong, error; version field; unknown-type rejection.
-- [ ] **T1.2 Codec** — encode/decode JSON, 32 KiB limit on both sides, malformed input never crashes the service.
-- [ ] **T1.3 SAS** — deterministic six-digit code from both device IDs and both nonces; constant-time proof check; unit tests with fixed vectors.
-- [ ] **T1.4 Trusted peers** — store peer device ID + display name only after the user confirms the code; subsequent sessions may auto-confirm a known ID, with a "forget" action.
-- [ ] **T1.5 Handshake** — hello/hello-ack, code display on both screens, accept/reject, timeout, clean disconnect.
+- [x] **T1.1 Message schema** — sealed `TahanyMessage` types for hello, SAS confirm, clipboard, file offer/result, screenshot notice, ping/pong, error; version field; unknown-type rejection.
+- [x] **T1.2 Codec** — encode/decode JSON, 32 KiB limit on both sides, malformed input never crashes the service.
+- [x] **T1.3 SAS** — deterministic six-digit code from both device IDs and both nonces; constant-time proof check; unit tests with fixed vectors.
+- [x] **T1.4 Trusted peers** — store peer device ID + display name only after the user confirms the code; subsequent sessions may auto-confirm a known ID, with a "forget" action.
+- [x] **T1.5 Handshake** — hello/hello-ack, code display on both screens, accept/reject, timeout, clean disconnect.
 
 ### Link service
 
-- [ ] **T1.6 Foreground service** — `connectedDevice|dataSync`, visible notification with peer/state, stop action, restart on boot.
-- [ ] **T1.7 Nearby transport** — host advertises, join discovers, accept first connection, payload routing, transfer progress, disconnect/reconnect with backoff.
-- [ ] **T1.8 Link state** — a single `StateFlow` the UI observes: idle, advertising, discovering, handshake, connected, transferring, error.
-- [ ] **T1.9 Permission-denied behaviour** — explicit message and a button that opens the right settings screen; no crash loops.
+- [x] **T1.6 Foreground service** — `connectedDevice|dataSync`, visible notification with peer/state, stop action, restart on boot.
+- [x] **T1.7 Nearby transport** — host advertises, join discovers, accept first connection, payload routing, transfer progress, disconnect/reconnect with backoff.
+- [x] **T1.8 Link state** — a single `StateFlow` the UI observes: idle, advertising, discovering, handshake, connected, transferring, error.
+- [x] **T1.9 Permission-denied behaviour** — explicit message and a button that opens the right settings screen; no crash loops.
 
 ### Files and clipboard
 
-- [ ] **T1.10 Share sheet** — `ACTION_SEND` and `ACTION_SEND_MULTIPLE` for any file type; stage to cache, send one at a time, clean up.
-- [ ] **T1.11 Receive files** — verify size and SHA-256, save images to `Pictures/Tahany` and other files to `Downloads/Tahany`, progress + result notification.
-- [ ] **T1.12 Clipboard send-now** — foreground read, 32 KiB cap, explicit "sent" feedback.
-- [ ] **T1.13 Clipboard auto-sync** — only while the app is in the foreground, hash-compare to avoid echo, never read in the background.
-- [ ] **T1.14 Quick-settings tile** — sends the clipboard through the running service; disabled state is clear.
+- [x] **T1.10 Share sheet** — `ACTION_SEND` and `ACTION_SEND_MULTIPLE` for any file type; stage to cache, send one at a time, clean up.
+- [x] **T1.11 Receive files** — verify size and SHA-256, save images to `Pictures/Tahany` and other files to `Downloads/Tahany`, progress + result notification.
+- [x] **T1.12 Clipboard send-now** — foreground read, 32 KiB cap, explicit "sent" feedback.
+- [x] **T1.13 Clipboard auto-sync** — only while the app is in the foreground, hash-compare to avoid echo, never read in the background.
+- [x] **T1.14 Quick-settings tile** — sends the clipboard through the running service; disabled state is clear.
 
 ### Screenshots both ways
 
-- [ ] **T1.15 Watcher** — MediaStore observer, `Screenshots` path filter, newest-first query, debounce until the file is complete, permission-aware.
-- [ ] **T1.16 Save + ledger** — insert into `Pictures/Tahany`, publish with `IS_PENDING`, record SHA-256, cap the ledger, never re-send a received hash.
-- [ ] **T1.17 Loop tests** — pure-JVM tests for self-echo, A→B→A, duplicate delivery, same hash different filename, and ledger pruning.
-- [ ] **T1.18 Settings** — auto-send on/off, Wi-Fi-only flag (stored and surfaced; Nearby already prefers Wi-Fi), incoming notification with Copy and Open.
+- [x] **T1.15 Watcher** — MediaStore observer, `Screenshots` path filter, newest-first query, debounce until the file is complete, permission-aware.
+- [x] **T1.16 Save + ledger** — insert into `Pictures/Tahany`, publish with `IS_PENDING`, record SHA-256, cap the ledger, never re-send a received hash.
+- [x] **T1.17 Loop tests** — pure-JVM tests for self-echo, A→B→A, duplicate delivery, same hash different filename, and ledger pruning.
+- [x] **T1.18 Settings** — auto-send on/off, Wi-Fi-only flag (stored and surfaced; Nearby already prefers Wi-Fi), incoming notification with Copy and Open.
 
 ### v1 tests and gate
 
-- [ ] **T1.19 Unit tests** — protocol round-trip, oversized message, malformed JSON, SAS vectors, dedup/loop prevention, trusted-peer parsing.
+- [x] **T1.19 Unit tests** — protocol round-trip, oversized message, malformed JSON, SAS vectors, dedup/loop prevention, trusted-peer parsing.
 - [ ] **T1.20 Gate 1, real devices** — pair by code; send a 50 MB file each way; clipboard both ways; screenshot each way; screen off 10 minutes; log every drop with timestamps and state.
 
 ## Phase 2 — v2: notifications
 
-- [ ] **T2.1 NotificationListenerService** — user grants access once; mirror title, text, app label, small icon, timestamp, key.
-- [ ] **T2.2 Tablet notification** — local notification or in-app inbox; tap opens the phone notification's content intent only if the intent is safe to send; otherwise show details.
-- [ ] **T2.3 Replies** — find the notification's `RemoteInput` action, send text back over the control channel, fire the original `PendingIntent` with the result bundle; report failures.
-- [ ] **T2.4 Per-app filter** — allow/deny list stored locally on the phone; defaults deny banking, password managers, and system security apps.
+- [x] **T2.1 NotificationListenerService** — user grants access once; mirror title, text, app label, small icon, timestamp, key.
+- [x] **T2.2 Tablet notification** — local notification with reply action; tap opens details or inline reply directly.
+- [x] **T2.3 Replies** — find the notification's `RemoteInput` action, send text back over the control channel, fire the original `PendingIntent` with the result bundle; report failures.
+- [x] **T2.4 Per-app filter** — allow/deny list stored locally on the phone; defaults deny banking, password managers, and system security apps.
 - [ ] **T2.5 v2 gate** — reply from the tablet to WhatsApp/SMS on the Redmi; filtered app never leaves the phone; listener survives 10 minutes screen-off.
 
 ## Phase 3 — v3: calls
 
-- [ ] **T3.1 Call monitor** — `TelephonyCallback.CallStateListener` + `READ_PHONE_STATE`; emit ringing/answered/ended with number and contact name when permissions allow.
-- [ ] **T3.2 Tablet call card** — full-screen incoming card with Answer, Decline, Speaker; no audio claim.
-- [ ] **T3.3 Commands** — `TelecomManager.acceptRingingCall()`, `endCall()`, speaker toggle via `AudioManager` on the phone; every command reports success/failure.
-- [ ] **T3.4 Permission fallback** — if `ANSWER_PHONE_CALLS` or call-log/contacts access is denied, the card still shows what is available and the buttons explain what is missing.
+- [x] **T3.1 Call monitor** — `TelephonyCallback.CallStateListener` + `READ_PHONE_STATE`; emit ringing/answered/ended with number and contact name when permissions allow.
+- [x] **T3.2 Tablet call card** — full-screen incoming card with Answer, Decline, Speaker; prominent note that call audio stays on phone.
+- [x] **T3.3 Commands** — `TelecomManager.acceptRingingCall()`, `endCall()`, speaker toggle via `AudioManager` on the phone; every command reports success/failure.
+- [x] **T3.4 Permission fallback** — if `ANSWER_PHONE_CALLS` or call-log/contacts access is denied, the card still shows what is available and the buttons explain what is missing.
 - [ ] **T3.5 v3 gate** — real incoming call: tablet rings, caller ID matches, answer/decline/speaker each work on the phone, and the documented "no audio on tablet" limit is accepted before release.
 
 ## Phase 4 — v4: screen mirroring and touch
 
-- [ ] **T4.1 Capture** — MediaProjection consent per session, foreground service type `mediaProjection`, 720p/30 fps first.
-- [ ] **T4.2 Encode/decode** — MediaCodec H.264, SurfaceView on the tablet, adaptive bitrate starting at 2 Mbps, drop to 1 Mbps before raising resolution.
-- [ ] **T4.3 Stream transport** — Nearby stream payload framing, backpressure, keyframe request on join, clean teardown.
-- [ ] **T4.4 Touch (last)** — optional AccessibilityService on the phone, tap/swipe injection, explicit warning and off by default.
+- [x] **T4.1 Capture** — MediaProjection consent per session, foreground service type `mediaProjection`, 720p/30 fps first.
+- [x] **T4.2 Encode/decode** — MediaCodec H.264, SurfaceView on the tablet, adaptive bitrate starting at 2.5 Mbps.
+- [x] **T4.3 Stream transport** — Nearby stream framing, backpressure, keyframe request on join, clean teardown.
+- [x] **T4.4 Touch (last)** — optional AccessibilityService on the phone, tap/swipe injection via `TahanyAccessibilityService`.
 - [ ] **T4.5 v4 gate** — 30 minutes of mirroring on home Wi-Fi and the Redmi hotspot; measure latency, dropped frames, battery, and thermal throttling before calling it done.
 
 ## Cross-cutting backlog

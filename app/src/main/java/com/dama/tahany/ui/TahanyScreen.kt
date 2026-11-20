@@ -72,13 +72,18 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dama.tahany.model.ActiveCallState
 import com.dama.tahany.model.AppSettings
 import com.dama.tahany.model.DeviceRole
 import com.dama.tahany.model.FoundPeer
 import com.dama.tahany.model.LinkPhase
 import com.dama.tahany.model.LinkUiState
+import com.dama.tahany.model.MirroredNotification
+import com.dama.tahany.model.ScreenCastState
 import com.dama.tahany.model.TransferState
 import com.dama.tahany.model.TransferStatus
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedTextField
 import com.dama.tahany.permissions.GuideStep
 import com.dama.tahany.permissions.OemGuide
 import com.dama.tahany.permissions.PermissionCatalog
@@ -103,7 +108,7 @@ fun TahanyScreen(viewModel: TahanyViewModel) {
     }
 
     val missing = remember(permissionRefresh, settings?.role) {
-        PermissionCatalog.missing(context)
+        PermissionCatalog.missing(context, settings?.role)
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -146,6 +151,12 @@ fun TahanyScreen(viewModel: TahanyViewModel) {
             onToggleScreenshot = viewModel::setAutoScreenshot,
             onToggleWifiOnly = viewModel::setWifiOnly,
             onForgetPeer = viewModel::forgetPeer,
+            onAnswerCall = viewModel::answerCall,
+            onDeclineCall = viewModel::declineCall,
+            onToggleSpeaker = viewModel::toggleSpeaker,
+            onReplyNotification = viewModel::replyNotification,
+            onStartScreenCast = viewModel::startScreenCast,
+            onStopScreenCast = viewModel::stopScreenCast,
         )
     }
 }
@@ -346,6 +357,12 @@ private fun HomeScreen(
     onToggleScreenshot: (Boolean) -> Unit,
     onToggleWifiOnly: (Boolean) -> Unit,
     onForgetPeer: (String) -> Unit,
+    onAnswerCall: () -> Unit = {},
+    onDeclineCall: () -> Unit = {},
+    onToggleSpeaker: () -> Unit = {},
+    onReplyNotification: (String, String) -> Unit = { _, _ -> },
+    onStartScreenCast: () -> Unit = {},
+    onStopScreenCast: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(
@@ -405,6 +422,35 @@ private fun HomeScreen(
             }
 
             if (link.phase == LinkPhase.CONNECTED) {
+                link.activeCall?.let { call ->
+                    item {
+                        ActiveCallCard(
+                            call = call,
+                            onAnswer = onAnswerCall,
+                            onDecline = onDeclineCall,
+                            onToggleSpeaker = onToggleSpeaker,
+                        )
+                    }
+                }
+
+                if (settings.role == DeviceRole.TABLET && link.mirroredNotifications.isNotEmpty()) {
+                    item {
+                        MirroredNotificationsCard(
+                            notifications = link.mirroredNotifications,
+                            onReply = onReplyNotification,
+                        )
+                    }
+                }
+
+                item {
+                    ScreenCastCard(
+                        role = settings.role,
+                        state = link.screenCast,
+                        onStart = onStartScreenCast,
+                        onStop = onStopScreenCast,
+                    )
+                }
+
                 item {
                     QuickActionsCard(
                         onSendClipboard = onSendClipboard,
@@ -881,4 +927,177 @@ private fun formatBytes(bytes: Long): String {
     if (kb < 1024) return String.format(java.util.Locale.ROOT, "%.1f KB", kb)
     val mb = kb / 1024.0
     return String.format(java.util.Locale.ROOT, "%.1f MB", mb)
+}
+
+@Composable
+private fun ActiveCallCard(
+    call: ActiveCallState,
+    onAnswer: () -> Unit,
+    onDecline: () -> Unit,
+    onToggleSpeaker: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Phone, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = call.contactName ?: call.number ?: "Incoming Phone Call",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = "Call on phone • Audio stays on phone or headset",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (call.state == com.dama.tahany.protocol.CallState.RINGING) {
+                    Button(
+                        onClick = onAnswer,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF2E7D32),
+                        ),
+                    ) {
+                        Text("Answer")
+                    }
+                }
+                Button(
+                    onClick = onDecline,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) {
+                    Text("Decline")
+                }
+                OutlinedButton(onClick = onToggleSpeaker) {
+                    Text(if (call.isSpeakerOn) "Speaker Off" else "Speaker On")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MirroredNotificationsCard(
+    notifications: List<MirroredNotification>,
+    onReply: (String, String) -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                text = "Phone Notifications",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            for (notif in notifications.take(5)) {
+                var replyText by rememberSaveable(notif.key) { mutableStateOf("") }
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = notif.appLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = notif.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        if (notif.text.isNotBlank()) {
+                            Text(
+                                text = notif.text,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (notif.hasReply) {
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    value = replyText,
+                                    onValueChange = { replyText = it },
+                                    placeholder = { Text("Type reply…", style = MaterialTheme.typography.bodySmall) },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Button(
+                                    onClick = {
+                                        if (replyText.isNotBlank()) {
+                                            onReply(notif.key, replyText)
+                                            replyText = ""
+                                        }
+                                    },
+                                    enabled = replyText.isNotBlank(),
+                                ) {
+                                    Icon(Icons.Filled.Send, contentDescription = "Send Reply", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScreenCastCard(
+    role: DeviceRole?,
+    state: ScreenCastState,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                text = "Screen Mirroring",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            val info = when {
+                state.isSharing -> "Your phone screen is currently streaming to the tablet."
+                state.isReceiving -> "Receiving screen stream from phone."
+                role == DeviceRole.PHONE -> "Share your phone screen to the Honor Pad X9a in 720p HD."
+                else -> "The tablet can display the phone screen when shared."
+            }
+            Text(info, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (role == DeviceRole.PHONE) {
+                if (state.isSharing) {
+                    Button(
+                        onClick = onStop,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                        ),
+                    ) {
+                        Text("Stop Sharing Screen")
+                    }
+                } else {
+                    Button(onClick = onStart) {
+                        Text("Share Phone Screen")
+                    }
+                }
+            }
+        }
+    }
 }

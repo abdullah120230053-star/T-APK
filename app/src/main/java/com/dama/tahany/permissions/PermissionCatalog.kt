@@ -22,7 +22,7 @@ data class PermissionItem(
  * permission dialog that never appears.
  */
 object PermissionCatalog {
-    fun items(api: Int = Build.VERSION.SDK_INT): List<PermissionItem> = buildList {
+    fun items(role: DeviceRole? = null, api: Int = Build.VERSION.SDK_INT): List<PermissionItem> = buildList {
         if (api >= 31) {
             add(
                 PermissionItem(
@@ -93,13 +93,44 @@ object PermissionCatalog {
                 )
             }
         }
+
+        if (role == DeviceRole.PHONE) {
+            add(
+                PermissionItem(
+                    Manifest.permission.READ_PHONE_STATE,
+                    "Phone calls",
+                    "Alert the tablet when a call rings on your phone.",
+                ),
+            )
+            add(
+                PermissionItem(
+                    Manifest.permission.READ_CALL_LOG,
+                    "Caller ID",
+                    "Identify incoming phone numbers for the tablet.",
+                ),
+            )
+            add(
+                PermissionItem(
+                    Manifest.permission.READ_CONTACTS,
+                    "Contacts",
+                    "Display the caller's name on the tablet.",
+                ),
+            )
+            add(
+                PermissionItem(
+                    Manifest.permission.ANSWER_PHONE_CALLS,
+                    "Call control",
+                    "Answer and decline phone calls from the tablet.",
+                ),
+            )
+        }
     }
 
-    fun missing(context: Context, api: Int = Build.VERSION.SDK_INT): List<PermissionItem> =
-        items(api).filterNot { context.has(it.permission) }
+    fun missing(context: Context, role: DeviceRole? = null, api: Int = Build.VERSION.SDK_INT): List<PermissionItem> =
+        items(role, api).filterNot { context.has(it.permission) }
 
-    fun hasAll(context: Context, api: Int = Build.VERSION.SDK_INT): Boolean =
-        missing(context, api).isEmpty()
+    fun hasAll(context: Context, role: DeviceRole? = null, api: Int = Build.VERSION.SDK_INT): Boolean =
+        missing(context, role, api).isEmpty()
 
     fun roleHint(role: DeviceRole?): String = when (role) {
         DeviceRole.PHONE -> "Phone mode: the phone keeps the link, notifications, and calls."

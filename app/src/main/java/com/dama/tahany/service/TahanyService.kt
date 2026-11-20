@@ -13,14 +13,22 @@ import android.os.Looper
 import android.widget.Toast
 import androidx.core.app.ServiceCompat
 import com.dama.tahany.R
+import com.dama.tahany.calls.CallCommandHandler
+import com.dama.tahany.calls.CallMonitor
 import com.dama.tahany.clipboard.ClipboardSyncManager
 import com.dama.tahany.data.SettingsRepository
 import com.dama.tahany.files.IncomingFileStore
 import com.dama.tahany.files.OutgoingFileStager
 import com.dama.tahany.link.LinkController
 import com.dama.tahany.link.LinkEvent
+import com.dama.tahany.model.DeviceRole
 import com.dama.tahany.model.LinkPhase
 import com.dama.tahany.model.LinkUiState
+import com.dama.tahany.notifications.TahanyNotificationListenerService
+import com.dama.tahany.protocol.CallAction
+import com.dama.tahany.protocol.CallState
+import com.dama.tahany.protocol.TahanyMessage
+import com.dama.tahany.screencast.TahanyAccessibilityService
 import com.dama.tahany.screenshot.ScreenshotCandidate
 import com.dama.tahany.screenshot.ScreenshotLedger
 import com.dama.tahany.screenshot.ScreenshotLedgerStore
@@ -51,6 +59,8 @@ class TahanyService : Service() {
     private lateinit var ledgerStore: ScreenshotLedgerStore
     private lateinit var ledger: ScreenshotLedger
     private lateinit var loopGuard: ScreenshotLoopGuard
+    private var callMonitor: CallMonitor? = null
+    private lateinit var callCommandHandler: CallCommandHandler
 
     inner class LocalBinder : android.os.Binder() {
         fun controller(): LinkController = link
@@ -58,6 +68,7 @@ class TahanyService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeServiceInstance = this
         NotificationHelper.createChannels(this)
 
         settings = SettingsRepository(this)
@@ -69,11 +80,28 @@ class TahanyService : Service() {
         ledger = ledgerStore.load()
         loopGuard = ScreenshotLoopGuard(ledger)
         watcher = ScreenshotWatcher(this, ::onScreenshotCandidate)
+        callCommandHandler = CallCommandHandler(this)
 
         if (!startForegroundCompat()) return
 
         clipboard.start()
         watcher.start()
+
+        scope.launch {
+            settings.settings.collect { current ->
+                if (current.role == DeviceRole.PHONE) {
+                    if (callMonitor == null) {
+                        callMonitor = CallMonitor(this@TahanyService) { callEvent ->
+                            link.sendCallEvent(callEvent)
+                        }
+                        callMonitor?.start()
+                    }
+                } else {
+                    callMonitor?.stop()
+                    callMonitor = null
+                }
+            }
+        }
 
         scope.launch {
             link.state.collect { state -> updateServiceNotification(state) }
@@ -104,6 +132,22 @@ class TahanyService : Service() {
             ACTION_SEND_TEXT -> link.sendClipboard(intent.getStringExtra(EXTRA_TEXT).orEmpty())
             ACTION_SEND_URIS -> sendUris(intent.uris())
             ACTION_COPY_TEXT -> copyText(intent.getStringExtra(EXTRA_TEXT))
+            ACTION_SEND_NOTIFICATION_REPLY -> {
+                val key = intent.getStringExtra(EXTRA_NOTIFICATION_KEY).orEmpty()
+                val text = intent.getStringExtra(EXTRA_REPLY_TEXT).orEmpty()
+                if (key.isNotEmpty() && text.isNotEmpty()) {
+                    link.sendNotificationReply(key, text)
+                }
+            }
+            ACTION_SEND_CALL_COMMAND -> {
+                val actionStr = intent.getStringExtra(EXTRA_CALL_ACTION).orEmpty()
+                val action = runCatching { CallAction.valueOf(actionStr) }.getOrNull()
+                if (action != null) {
+                    link.sendCallCommand(action)
+                    if (action == CallAction.SPEAKER_ON) link.updateSpeakerState(true)
+                    else if (action == CallAction.SPEAKER_OFF) link.updateSpeakerState(false)
+                }
+            }
             ACTION_REFRESH -> {
                 watcher.refresh()
                 startForegroundCompat()
@@ -117,11 +161,14 @@ class TahanyService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
+        callMonitor?.stop()
+        if (activeServiceInstance === this) activeServiceInstance = null
         runCatching { watcher.stop() }
         runCatching { clipboard.stop() }
         runCatching { link.close() }
         scope.cancel()
         NotificationHelper.cancel(this, NotificationHelper.SERVICE_NOTIFICATION_ID)
+        NotificationHelper.cancelCall(this)
         super.onDestroy()
     }
 
@@ -245,6 +292,56 @@ class TahanyService : Service() {
             is LinkEvent.ScreenshotReceived -> saveIncomingScreenshot(event)
             is LinkEvent.Notice -> updateServiceNotification(link.state.value)
             is LinkEvent.Problem -> toast(event.message)
+
+            is LinkEvent.NotificationReceived -> {
+                NotificationHelper.notifyMirrored(this, event.event)
+            }
+
+            is LinkEvent.NotificationReplyReceived -> {
+                val ok = TahanyNotificationListenerService.dispatchReply(this, event.key, event.text)
+                if (ok) {
+                    toast("Sent reply.")
+                } else {
+                    toast("Could not send reply for ${event.key}.")
+                }
+            }
+
+            is LinkEvent.CallEventReceived -> {
+                if (event.event.state == CallState.RINGING) {
+                    NotificationHelper.notifyIncomingCall(
+                        this,
+                        event.event,
+                        link.state.value.activeCall?.isSpeakerOn ?: false,
+                    )
+                } else {
+                    NotificationHelper.cancelCall(this)
+                }
+            }
+
+            is LinkEvent.CallCommandReceived -> {
+                callCommandHandler.execute(event.command.action)
+            }
+
+            is LinkEvent.ScreenCastOfferReceived -> {
+                link.sendScreenCastAnswer(true)
+                toast("Incoming screen stream.")
+            }
+
+            is LinkEvent.ScreenCastAnswerReceived -> {
+                if (event.answer.accepted) {
+                    toast("Screen sharing accepted by tablet.")
+                } else {
+                    toast("Screen sharing declined: ${event.answer.reason ?: "cancelled"}")
+                }
+            }
+
+            is LinkEvent.ScreenCastStopReceived -> {
+                toast("Screen sharing stopped.")
+            }
+
+            is LinkEvent.TouchEventReceived -> {
+                TahanyAccessibilityService.injectTouch(event.touch)
+            }
         }
     }
 
@@ -342,7 +439,18 @@ class TahanyService : Service() {
         const val ACTION_SEND_URIS = "com.dama.tahany.action.SEND_URIS"
         const val ACTION_COPY_TEXT = "com.dama.tahany.action.COPY_TEXT"
         const val ACTION_REFRESH = "com.dama.tahany.action.REFRESH"
+        const val ACTION_SEND_NOTIFICATION_REPLY = "com.dama.tahany.action.SEND_NOTIFICATION_REPLY"
+        const val ACTION_SEND_CALL_COMMAND = "com.dama.tahany.action.SEND_CALL_COMMAND"
         const val EXTRA_URIS = "com.dama.tahany.extra.URIS"
         const val EXTRA_TEXT = "com.dama.tahany.extra.TEXT"
+        const val EXTRA_NOTIFICATION_KEY = "com.dama.tahany.extra.NOTIFICATION_KEY"
+        const val EXTRA_REPLY_TEXT = "com.dama.tahany.extra.REPLY_TEXT"
+        const val EXTRA_CALL_ACTION = "com.dama.tahany.extra.CALL_ACTION"
+
+        private var activeServiceInstance: TahanyService? = null
+
+        fun forwardNotification(event: TahanyMessage.NotificationEvent) {
+            activeServiceInstance?.link?.sendNotification(event)
+        }
     }
 }
