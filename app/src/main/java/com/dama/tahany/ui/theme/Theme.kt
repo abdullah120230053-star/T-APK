@@ -7,10 +7,12 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 
 private val Green = Color(0xFF0B6B4F)
 private val GreenDark = Color(0xFF8FE3B0)
-private val Sand = Color(0xFFF7F2E8)
+private val Canvas = Color(0xFFF3F6EF)
 private val Ink = Color(0xFF17211C)
 private val Coral = Color(0xFFB34A3C)
 
@@ -25,9 +27,13 @@ private val LightColors = lightColorScheme(
     onSecondaryContainer = Color(0xFF0D1F16),
     tertiary = Coral,
     onTertiary = Color.White,
-    background = Sand,
+    background = Canvas,
     onBackground = Ink,
-    surface = Color(0xFFFFFBF7),
+    surface = Color(0xFFFCFDF8),
+    surfaceContainer = Color(0xFFEBF1E7),
+    surfaceContainerHigh = Color(0xFFE3EBDF),
+    surfaceContainerHighest = Color(0xFFE1EBDF),
+    outlineVariant = Color(0xFFC4CEC1),
     onSurface = Ink,
     surfaceVariant = Color(0xFFE4E9E2),
     onSurfaceVariant = Color(0xFF434943),
@@ -48,7 +54,11 @@ private val DarkColors = darkColorScheme(
     onTertiary = Color(0xFF690005),
     background = Color(0xFF101512),
     onBackground = Color(0xFFE1E4DE),
-    surface = Color(0xFF171C18),
+    surface = Color(0xFF18211B),
+    surfaceContainer = Color(0xFF202A22),
+    surfaceContainerHigh = Color(0xFF29352C),
+    surfaceContainerHighest = Color(0xFF29352C),
+    outlineVariant = Color(0xFF414D43),
     onSurface = Color(0xFFE1E4DE),
     surfaceVariant = Color(0xFF434943),
     onSurfaceVariant = Color(0xFFC3C9C2),
@@ -56,11 +66,25 @@ private val DarkColors = darkColorScheme(
     error = Color(0xFFFFB4AB),
 )
 
+private val SystemTypography = Typography()
+private val TahanyTypography = Typography(
+    headlineLarge = SystemTypography.headlineLarge.copy(
+        fontWeight = FontWeight.Bold,
+        letterSpacing = (-0.8).sp,
+    ),
+    headlineMedium = SystemTypography.headlineMedium.copy(
+        fontWeight = FontWeight.Bold,
+        letterSpacing = (-0.5).sp,
+    ),
+    headlineSmall = SystemTypography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+    titleMedium = SystemTypography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+)
+
 @Composable
 fun TahanyTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
-        typography = Typography(),
+        typography = TahanyTypography,
         content = content,
     )
 }

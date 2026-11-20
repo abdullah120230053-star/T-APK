@@ -148,6 +148,33 @@ class ProtocolCodecTest {
     }
 
     @Test
+    fun fileAndScreenshotMetadataPreservePayloadIds() {
+        val hash = "8".repeat(64)
+        val offer = TahanyMessage.FileOffer(
+            transferId = "file", name = "example.txt", mimeType = "text/plain",
+            size = 64, sha256 = hash, payloadId = Long.MIN_VALUE,
+        )
+        val screenshot = TahanyMessage.ScreenshotNotice(
+            sha256 = hash, name = "example.png", size = 128, takenAt = 1000,
+            payloadId = Long.MAX_VALUE, transferId = "screenshot",
+        )
+
+        assertEquals(offer, ProtocolCodec.decode(ProtocolCodec.encode(offer)))
+        assertEquals(screenshot, ProtocolCodec.decode(ProtocolCodec.encode(screenshot)))
+    }
+
+    @Test
+    fun pairingCodeDependsOnNearbySession() {
+        val first = ByteArray(16) { 1 }
+        val second = ByteArray(16) { 2 }
+        val channel = byteArrayOf(10, 20, 30)
+        val phoneCode = PairingCode.derive("phone", "tablet", first, second, channel)
+        val tabletCode = PairingCode.derive("tablet", "phone", second, first, channel)
+        assertEquals(phoneCode, tabletCode)
+        assertTrue(phoneCode != PairingCode.derive("phone", "tablet", first, second, byteArrayOf(30, 20, 10)))
+    }
+
+    @Test
     fun screenCastAndTouchRoundTrip() {
         val offer = TahanyMessage.ScreenCastOffer(
             width = 1920,

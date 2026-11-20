@@ -36,8 +36,8 @@ class ClipboardSyncManager(
 
     fun start() {
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
-        foreground = true
-        lastHash = readClipboard()?.let(::hash)
+        foreground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+        if (foreground) lastHash = readClipboard()?.let(::hash)
         pollJob?.cancel()
         pollJob = scope.launch {
             while (isActive) {
@@ -67,9 +67,9 @@ class ClipboardSyncManager(
 
     fun sendNow() {
         mainHandler.post {
-            val text = readClipboard() ?: return@post
-            lastHash = hash(text)
-            link.sendClipboard(text)
+            val text = readClipboard()
+            if (text != null) lastHash = hash(text)
+            link.sendClipboard(text.orEmpty())
         }
     }
 
@@ -95,8 +95,7 @@ class ClipboardSyncManager(
     private fun readClipboard(): String? {
         val clip = clipboard?.primaryClip ?: return null
         if (clip.itemCount == 0) return null
-        val text = clip.getItemAt(0).coerceToText(context)?.toString()?.trim().orEmpty()
-        return if (text.isBlank()) null else text.take(MAX_CHARS)
+        return clip.getItemAt(0).text?.toString()?.takeIf { it.isNotBlank() }
     }
 
     private fun hash(text: String): String =
@@ -106,6 +105,5 @@ class ClipboardSyncManager(
 
     private companion object {
         const val POLL_INTERVAL_MS = 1_500L
-        const val MAX_CHARS = 8_000
     }
 }

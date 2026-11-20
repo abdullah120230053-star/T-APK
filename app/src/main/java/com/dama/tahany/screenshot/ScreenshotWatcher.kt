@@ -17,6 +17,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class ScreenshotCandidate(
     val id: Long,
@@ -40,6 +42,7 @@ class ScreenshotWatcher(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val seenIds = LinkedHashSet<Long>()
     private var scanJob: Job? = null
+    private val scanLock = Mutex()
     private var registered = false
     private var lastScanSeconds = 0L
 
@@ -78,7 +81,7 @@ class ScreenshotWatcher(
         scanJob?.cancel()
         scanJob = scope.launch {
             delay(900L)
-            scan()
+            scanLock.withLock { scan() }
         }
     }
 
@@ -86,7 +89,6 @@ class ScreenshotWatcher(
         if (!hasImagePermission()) return
         val now = System.currentTimeMillis() / 1000L
         val since = if (lastScanSeconds > 0) lastScanSeconds - 10L else now - 120L
-        lastScanSeconds = now
 
         val api29 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
         val projection = buildList {
@@ -97,7 +99,7 @@ class ScreenshotWatcher(
             if (api29) add(MediaStore.Images.Media.RELATIVE_PATH) else add(MediaStore.Images.Media.DATA)
         }.toTypedArray()
 
-        val selection = "${MediaStore.Images.Media.DATE_ADDED} >= ?"
+        val selection = "${MediaStore.Images.Media.DATE_ADDED} >= ? AND ${MediaStore.Images.Media.SIZE} > 0"
         val sort = "${MediaStore.Images.Media.DATE_ADDED} DESC"
         val candidates = mutableListOf<ScreenshotCandidate>()
 
@@ -150,6 +152,7 @@ class ScreenshotWatcher(
             return
         }
 
+        lastScanSeconds = now
         candidates.forEach(onScreenshot)
     }
 

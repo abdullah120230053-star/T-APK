@@ -75,7 +75,7 @@ object OemGuide {
             } else {
                 "If your build still stops the service, exempt Tahany from battery optimisation."
             },
-            intent = batteryOptimizationIntent(context),
+            intent = batteryOptimizationIntent(),
         )
         return steps
     }
@@ -95,10 +95,8 @@ object OemGuide {
         Uri.fromParts("package", context.packageName, null),
     ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-    private fun batteryOptimizationIntent(context: Context): Intent =
-        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-            data = Uri.fromParts("package", context.packageName, null)
-        }
+    private fun batteryOptimizationIntent(): Intent =
+        Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
 
     private fun resolve(context: Context, intent: Intent?): Intent? {
         if (intent == null) return null

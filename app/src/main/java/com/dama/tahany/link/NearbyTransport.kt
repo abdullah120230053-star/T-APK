@@ -1,7 +1,9 @@
 package com.dama.tahany.link
 
 import android.content.Context
-import com.dama.tahany.util.FileNames
+import android.net.Uri
+import android.os.Build
+import com.dama.tahany.files.MAX_TRANSFER_BYTES
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.AdvertisingOptions
 import com.google.android.gms.nearby.connection.ConnectionInfo
@@ -17,7 +19,7 @@ import com.google.android.gms.nearby.connection.PayloadCallback
 import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import com.google.android.gms.nearby.connection.Strategy
 import java.io.File
-import java.util.UUID
+import java.io.InputStream
 import java.util.concurrent.ConcurrentHashMap
 
 const val NEARBY_SERVICE_ID = "com.dama.tahany.link"
@@ -29,6 +31,7 @@ sealed interface TransportEvent {
         val endpointId: String,
         val name: String,
         val incoming: Boolean,
+        val channelToken: ByteArray,
     ) : TransportEvent
 
     data class Connected(val endpointId: String, val name: String) : TransportEvent
@@ -36,10 +39,11 @@ sealed interface TransportEvent {
     data class BytesReceived(val endpointId: String, val bytes: ByteArray) : TransportEvent
     data class FileReceived(
         val endpointId: String,
-        val file: File,
-        val name: String,
-        val size: Long,
+        val payloadId: Long,
+        val uri: Uri,
     ) : TransportEvent
+
+    data class StreamReceived(val endpointId: String, val stream: InputStream) : TransportEvent
 
     data class TransferProgress(
         val endpointId: String,
@@ -51,8 +55,6 @@ sealed interface TransportEvent {
     ) : TransportEvent
 
     data class Failure(val message: String, val cause: Throwable? = null) : TransportEvent
-    data object AdvertisingStarted : TransportEvent
-    data object Discovering : TransportEvent
 }
 
 /**
@@ -66,16 +68,29 @@ class NearbyTransport(
     private val client: ConnectionsClient = Nearby.getConnectionsClient(context)
     private val endpointNames = ConcurrentHashMap<String, String>()
     private val outgoingPayloads = ConcurrentHashMap<Long, String>()
+    private val incomingFiles = mutableMapOf<Long, Uri>()
     private var currentEndpointId: String? = null
+    private var pendingEndpointId: String? = null
+    private var acceptingIncoming = false
+    private var session = 0
 
     private val lifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
+            if (info.isIncomingConnection && !acceptingIncoming ||
+                pendingEndpointId?.let { it != endpointId } == true ||
+                currentEndpointId != null
+            ) {
+                client.rejectConnection(endpointId)
+                return
+            }
+            pendingEndpointId = endpointId
             endpointNames[endpointId] = info.endpointName
             emit(
                 TransportEvent.ConnectionInitiated(
                     endpointId = endpointId,
                     name = info.endpointName,
                     incoming = info.isIncomingConnection,
+                    channelToken = info.rawAuthenticationToken,
                 ),
             )
             // The six-digit SAS is checked after the link opens. Accepting here
@@ -85,6 +100,9 @@ class NearbyTransport(
         }
 
         override fun onConnectionResult(endpointId: String, resolution: ConnectionResolution) {
+            if (pendingEndpointId != endpointId) return
+            pendingEndpointId = null
+            acceptingIncoming = false
             if (resolution.status.isSuccess) {
                 currentEndpointId = endpointId
                 client.stopAdvertising()
@@ -101,7 +119,10 @@ class NearbyTransport(
         }
 
         override fun onDisconnected(endpointId: String) {
-            if (currentEndpointId == endpointId) currentEndpointId = null
+            if (currentEndpointId != endpointId && pendingEndpointId != endpointId) return
+            currentEndpointId = null
+            pendingEndpointId = null
+            clearIncomingFiles()
             emit(TransportEvent.Disconnected(endpointId))
         }
     }
@@ -120,35 +141,46 @@ class NearbyTransport(
 
     private val payloadCallback = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
+            if (endpointId != currentEndpointId && endpointId != pendingEndpointId) {
+                client.cancelPayload(payload.id)
+                return
+            }
             when (payload.type) {
                 Payload.Type.BYTES -> {
                     payload.asBytes()?.let { emit(TransportEvent.BytesReceived(endpointId, it)) }
                 }
 
                 Payload.Type.FILE -> {
-                    val file = payload.asFile()?.asJavaFile()
-                    if (file == null) {
-                        fail("Incoming file payload had no file")
-                        return
+                    val file = payload.asFile() ?: return
+                    @Suppress("DEPRECATION")
+                    val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        file.asUri()
+                    } else {
+                        file.asJavaFile()?.let(Uri::fromFile)
                     }
-                    // Nearby can delete this temp file after the callback, so
-                    // move it into our own cache before doing any slow work.
-                    val staged = stageIncomingFile(file, payload.asFile()?.size ?: file.length())
-                    emit(
-                        TransportEvent.FileReceived(
-                            endpointId = endpointId,
-                            file = staged,
-                            name = file.name,
-                            size = staged.length(),
-                        ),
-                    )
+                    if (uri == null || incomingFiles.size >= 32) {
+                        client.cancelPayload(payload.id)
+                        uri?.let(::deleteIncomingFile)
+                    } else {
+                        incomingFiles[payload.id] = uri
+                    }
                 }
 
-                else -> fail("Unsupported payload type ${payload.type}")
+                Payload.Type.STREAM -> payload.asStream()?.asInputStream()?.let {
+                    emit(TransportEvent.StreamReceived(endpointId, it))
+                }
+                else -> client.cancelPayload(payload.id)
             }
         }
 
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
+            if (update.payloadId in incomingFiles &&
+                maxOf(update.totalBytes, update.bytesTransferred) > MAX_TRANSFER_BYTES
+            ) {
+                client.cancelPayload(update.payloadId)
+                incomingFiles.remove(update.payloadId)?.let(::deleteIncomingFile)
+                return
+            }
             emit(
                 TransportEvent.TransferProgress(
                     endpointId = endpointId,
@@ -164,34 +196,44 @@ class NearbyTransport(
                 update.status == PayloadTransferUpdate.Status.CANCELED
             ) {
                 outgoingPayloads.remove(update.payloadId)
+                incomingFiles.remove(update.payloadId)?.let { uri ->
+                    if (update.status == PayloadTransferUpdate.Status.SUCCESS) {
+                        emit(TransportEvent.FileReceived(endpointId, update.payloadId, uri))
+                    } else {
+                        deleteIncomingFile(uri)
+                    }
+                }
             }
         }
     }
 
     fun advertise(endpointName: String) {
+        acceptingIncoming = true
+        val attempt = session
         val options = AdvertisingOptions.Builder()
             .setStrategy(Strategy.P2P_POINT_TO_POINT)
             .build()
         client.startAdvertising(NEARBY_SERVICE_ID, endpointName, lifecycleCallback, options)
-            .addOnSuccessListener { emit(TransportEvent.AdvertisingStarted) }
-            .addOnFailureListener { error -> fail("Could not advertise", error) }
+            .addOnFailureListener { error -> if (session == attempt) fail("Could not advertise", error) }
     }
 
     fun discover() {
+        val attempt = session
         val options = DiscoveryOptions.Builder()
             .setStrategy(Strategy.P2P_POINT_TO_POINT)
             .build()
         client.startDiscovery(NEARBY_SERVICE_ID, discoveryCallback, options)
-            .addOnSuccessListener { emit(TransportEvent.Discovering) }
-            .addOnFailureListener { error -> fail("Could not discover", error) }
+            .addOnFailureListener { error -> if (session == attempt) fail("Could not discover", error) }
     }
 
     fun connect(endpointId: String, endpointName: String) {
+        pendingEndpointId = endpointId
+        val attempt = session
         val options = ConnectionOptions.Builder()
             .setLowPower(false)
             .build()
         client.requestConnection(endpointId, endpointName, lifecycleCallback, options)
-            .addOnFailureListener { error -> fail("Could not request a connection", error) }
+            .addOnFailureListener { error -> if (session == attempt) fail("Could not request a connection", error) }
     }
 
     fun sendBytes(endpointId: String, bytes: ByteArray) {
@@ -199,34 +241,35 @@ class NearbyTransport(
             .addOnFailureListener { error -> fail("Could not send a control message", error) }
     }
 
-    /**
-     * Returns the Nearby payload id, or null when the payload could not be
-     * created. Transfer updates refer to this id, not to our transfer id.
-     */
-    fun sendFile(endpointId: String, file: File, transferId: String): Long? {
-        val payload = try {
-            Payload.fromFile(file)
-        } catch (error: Exception) {
-            fail("Could not read ${file.name}", error)
-            return null
-        }
+    fun createFilePayload(file: File): Payload = Payload.fromFile(file)
+
+    fun sendFile(endpointId: String, payload: Payload, transferId: String) {
         outgoingPayloads[payload.id] = transferId
         client.sendPayload(endpointId, payload)
-            .addOnFailureListener { error ->
-                outgoingPayloads.remove(payload.id)
-                fail("Could not send ${file.name}", error)
+            .addOnFailureListener {
+                val failedId = outgoingPayloads.remove(payload.id) ?: return@addOnFailureListener
+                emit(TransportEvent.TransferProgress(
+                    endpointId, failedId, payload.id, 0L, 0L, PayloadTransferUpdate.Status.FAILURE,
+                ))
             }
-        return payload.id
     }
 
-    fun disconnect(endpointId: String? = currentEndpointId) {
-        if (endpointId != null) {
-            client.disconnectFromEndpoint(endpointId)
+    fun sendStream(endpointId: String, stream: InputStream, onFailure: () -> Unit) {
+        client.sendPayload(endpointId, Payload.fromStream(stream)).addOnFailureListener {
+            runCatching { stream.close() }
+            onFailure()
         }
-        currentEndpointId = null
+    }
+
+    fun cancelPayload(id: Long) {
+        client.cancelPayload(id)
     }
 
     fun stopSession() {
+        session += 1
+        acceptingIncoming = false
+        pendingEndpointId = null
+        clearIncomingFiles()
         client.stopAdvertising()
         client.stopDiscovery()
         client.stopAllEndpoints()
@@ -235,18 +278,16 @@ class NearbyTransport(
         outgoingPayloads.clear()
     }
 
-    private fun stageIncomingFile(source: File, size: Long): File {
-        val directory = File(context.cacheDir, "nearby-incoming").apply { mkdirs() }
-        val safeName = FileNames.sanitize(source.name)
-        val staged = File(directory, "${UUID.randomUUID()}-$safeName")
-        source.copyTo(staged, overwrite = true)
-        if (size > 0 && staged.length() != size) {
-            // A short copy is not a complete payload; keep the file so the
-            // receiver can report a checksum/size failure instead of silently
-            // presenting a truncated image.
-            fail("Incoming ${source.name} was ${staged.length()} of $size bytes")
+    private fun clearIncomingFiles() {
+        incomingFiles.values.forEach(::deleteIncomingFile)
+        incomingFiles.clear()
+    }
+
+    fun deleteIncomingFile(uri: Uri) {
+        runCatching {
+            if (uri.scheme == "file") uri.path?.let { File(it).delete() }
+            else context.contentResolver.delete(uri, null, null)
         }
-        return staged
     }
 
     private fun fail(message: String, error: Throwable? = null) {

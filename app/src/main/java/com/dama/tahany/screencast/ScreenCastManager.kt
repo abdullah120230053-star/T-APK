@@ -1,123 +1,65 @@
 package com.dama.tahany.screencast
 
 import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.projection.MediaProjection
-import android.util.Log
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import java.nio.ByteBuffer
+import java.io.DataOutputStream
 
-/**
- * Encodes the Phone's screen to an H.264 video stream via MediaCodec and MediaProjection.
- */
-class ScreenCastManager(
-    private val mediaProjection: MediaProjection,
-    private val scope: CoroutineScope,
-    private val onPacket: (ByteArray, Boolean) -> Unit,
-) {
-    private var codec: MediaCodec? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var pumpJob: Job? = null
-    @Volatile
-    private var isRunning = false
-
-    fun start(width: Int = 1280, height: Int = 720, dpi: Int = 320, bitrate: Int = 2_500_000) {
-        if (isRunning) return
-        isRunning = true
-
-        try {
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
-                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-                setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1) // 1 second keyframe interval
-            }
-
-            val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            val surface = encoder.createInputSurface()
-            encoder.start()
-            codec = encoder
-
-            virtualDisplay = mediaProjection.createVirtualDisplay(
-                "TahanyScreenCast",
-                width,
-                height,
-                dpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                surface,
-                null,
-                null,
-            )
-
-            pumpJob = scope.launch(Dispatchers.IO) {
-                pumpOutput(encoder)
-            }
-            Log.d(TAG, "Screen cast started: ${width}x${height} @ 30fps")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start screen cast", e)
-            stop()
+internal class ScreenCastManager(private val projection: MediaProjection) {
+    suspend fun encode(width: Int, height: Int, dpi: Int, output: DataOutputStream) {
+        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            setInteger(MediaFormat.KEY_BIT_RATE, 2_500_000)
+            setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
         }
-    }
-
-    private fun pumpOutput(encoder: MediaCodec) {
-        val bufferInfo = MediaCodec.BufferInfo()
-        while (isRunning && scope.isActive) {
-            val outputIndex = try {
-                encoder.dequeueOutputBuffer(bufferInfo, 10_000L)
-            } catch (e: Exception) {
-                Log.e(TAG, "Codec dequeue error", e)
-                break
-            }
-
-            if (outputIndex >= 0) {
-                val outputBuffer: ByteBuffer? = encoder.getOutputBuffer(outputIndex)
-                if (outputBuffer != null && bufferInfo.size > 0) {
-                    outputBuffer.position(bufferInfo.offset)
-                    outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-
-                    val chunk = ByteArray(bufferInfo.size)
-                    outputBuffer.get(chunk)
-
-                    val isKeyFrame = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                    onPacket(chunk, isKeyFrame)
+        val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        try {
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            val surface = codec.createInputSurface()
+            try {
+                codec.start()
+                val display = projection.createVirtualDisplay(
+                    "Tahany", width, height, dpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    surface, null, null,
+                ) ?: error("Android could not create a capture display.")
+                try {
+                    val info = MediaCodec.BufferInfo()
+                    while (currentCoroutineContext().isActive) {
+                        val index = codec.dequeueOutputBuffer(info, 10_000L)
+                        if (index < 0) continue
+                        try {
+                            val buffer = codec.getOutputBuffer(index)
+                            if (buffer != null && info.size in 1..MAX_FRAME_BYTES) {
+                                buffer.position(info.offset)
+                                buffer.limit(info.offset + info.size)
+                                val packet = ByteArray(info.size)
+                                buffer.get(packet)
+                                output.writeInt(packet.size)
+                                output.writeLong(info.presentationTimeUs)
+                                output.writeInt(info.flags and FRAME_FLAGS)
+                                output.write(packet)
+                                output.flush()
+                            }
+                        } finally {
+                            codec.releaseOutputBuffer(index, false)
+                        }
+                    }
+                } finally {
+                    display.release()
                 }
-                encoder.releaseOutputBuffer(outputIndex, false)
+            } finally {
+                surface.release()
             }
+        } finally {
+            codec.release()
         }
-    }
-
-    fun stop() {
-        isRunning = false
-        pumpJob?.cancel()
-        pumpJob = null
-
-        try {
-            virtualDisplay?.release()
-            virtualDisplay = null
-        } catch (_: Exception) {}
-
-        try {
-            codec?.stop()
-            codec?.release()
-            codec = null
-        } catch (_: Exception) {}
-
-        try {
-            mediaProjection.stop()
-        } catch (_: Exception) {}
-
-        Log.d(TAG, "Screen cast stopped")
-    }
-
-    companion object {
-        private const val TAG = "TahanyScreenCast"
     }
 }
+
+internal const val MAX_FRAME_BYTES = 2 * 1024 * 1024
+internal const val FRAME_FLAGS = MediaCodec.BUFFER_FLAG_CODEC_CONFIG or MediaCodec.BUFFER_FLAG_KEY_FRAME

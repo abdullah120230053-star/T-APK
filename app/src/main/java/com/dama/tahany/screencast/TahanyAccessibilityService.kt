@@ -3,7 +3,9 @@ package com.dama.tahany.screencast
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
-import android.util.DisplayMetrics
+import android.util.Size
+import com.dama.tahany.protocol.TOUCH_SWIPE
+import com.dama.tahany.protocol.TOUCH_TAP
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.dama.tahany.protocol.TahanyMessage
@@ -37,22 +39,21 @@ class TahanyAccessibilityService : AccessibilityService() {
 
         fun isEnabled(): Boolean = instance != null
 
-        fun injectTouch(touch: TahanyMessage.TouchEvent): Boolean {
+        fun injectTouch(touch: TahanyMessage.TouchEvent, display: Size): Boolean {
             val service = instance ?: return false
-            val metrics: DisplayMetrics = service.resources.displayMetrics
-            val x = (touch.xRatio * metrics.widthPixels).coerceIn(0f, metrics.widthPixels.toFloat())
-            val y = (touch.yRatio * metrics.heightPixels).coerceIn(0f, metrics.heightPixels.toFloat())
-
-            val path = Path().apply {
-                moveTo(x, y)
-                // Small delta for a tap
-                lineTo(x + 1f, y + 1f)
+            val swiping = touch.action == TOUCH_SWIPE
+            if (!swiping && touch.action != TOUCH_TAP) return false
+            if (listOf(touch.xRatio, touch.yRatio, touch.endXRatio, touch.endYRatio).any { it !in 0f..1f }) {
+                return false
             }
-
-            val stroke = GestureDescription.StrokeDescription(path, 0, 50)
-            val gesture = GestureDescription.Builder().addStroke(stroke).build()
-
-            return service.dispatchGesture(gesture, null, null)
+            val width = (display.width - 1).toFloat()
+            val height = (display.height - 1).toFloat()
+            val path = Path().apply {
+                moveTo(touch.xRatio * width, touch.yRatio * height)
+                if (swiping) lineTo(touch.endXRatio * width, touch.endYRatio * height)
+            }
+            val stroke = GestureDescription.StrokeDescription(path, 0, if (swiping) 320 else 50)
+            return service.dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
         }
     }
 }

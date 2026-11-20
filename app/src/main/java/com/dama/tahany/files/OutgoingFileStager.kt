@@ -6,9 +6,12 @@ import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import com.dama.tahany.util.FileNames
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
+
+internal const val MAX_TRANSFER_BYTES = 2L * 1024 * 1024 * 1024
 
 data class StagedFile(
     val file: File,
@@ -18,29 +21,41 @@ data class StagedFile(
 
 class OutgoingFileStager(private val context: Context) {
     suspend fun stage(uri: Uri): StagedFile? = withContext(Dispatchers.IO) {
-        val metadata = queryMetadata(uri)
-        val name = FileNames.sanitize(metadata.first ?: "shared-file")
-        val mime = metadata.second
-            ?: context.contentResolver.getType(uri)
-            ?: MimeTypeMap.getSingleton()
-                .getMimeTypeFromExtension(FileNames.extension(name))
-            ?: "application/octet-stream"
-        // Keep the original filename as the payload's display name. A unique
-        // per-file directory prevents collisions without prefixing the name.
-        val directory = File(context.cacheDir, "shared/${UUID.randomUUID()}").apply { mkdirs() }
+        val name = FileNames.sanitize(queryName(uri) ?: "shared-file")
+        val directory = File(context.cacheDir, "shared/${UUID.randomUUID()}")
         val target = File(directory, name)
+        var staged = false
         try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
-            } ?: return@withContext null
-            if (target.length() <= 0L) {
-                target.delete()
-                return@withContext null
+            val mime = context.contentResolver.getType(uri)
+                ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(FileNames.extension(name))
+                ?: "application/octet-stream"
+            check(directory.mkdirs())
+            val input = context.contentResolver.openInputStream(uri) ?: return@withContext null
+            input.use { source ->
+                target.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var bytes = 0L
+                    while (true) {
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                        val read = source.read(buffer)
+                        if (read < 0) break
+                        bytes += read
+                        check(bytes <= MAX_TRANSFER_BYTES) { "File exceeds the transfer limit." }
+                        output.write(buffer, 0, read)
+                    }
+                }
             }
+            staged = true
             StagedFile(target, name, mime)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
-            target.delete()
             null
+        } finally {
+            if (!staged) {
+                target.delete()
+                directory.delete()
+            }
         }
     }
 
@@ -52,9 +67,8 @@ class OutgoingFileStager(private val context: Context) {
         }
     }
 
-    private fun queryMetadata(uri: Uri): Pair<String?, String?> {
+    private fun queryName(uri: Uri): String? {
         var name: String? = null
-        var mime: String? = null
         runCatching {
             context.contentResolver.query(
                 uri,
@@ -69,7 +83,6 @@ class OutgoingFileStager(private val context: Context) {
                 }
             }
         }
-        mime = context.contentResolver.getType(uri)
-        return name to mime
+        return name
     }
 }

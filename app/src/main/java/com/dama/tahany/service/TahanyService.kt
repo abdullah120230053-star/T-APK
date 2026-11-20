@@ -6,6 +6,10 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
+import android.media.projection.MediaProjectionManager
+import android.util.Size
+import android.view.Surface
+import android.view.WindowManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -18,6 +22,7 @@ import com.dama.tahany.calls.CallMonitor
 import com.dama.tahany.clipboard.ClipboardSyncManager
 import com.dama.tahany.data.SettingsRepository
 import com.dama.tahany.files.IncomingFileStore
+import com.dama.tahany.files.MAX_TRANSFER_BYTES
 import com.dama.tahany.files.OutgoingFileStager
 import com.dama.tahany.link.LinkController
 import com.dama.tahany.link.LinkEvent
@@ -28,22 +33,24 @@ import com.dama.tahany.notifications.TahanyNotificationListenerService
 import com.dama.tahany.protocol.CallAction
 import com.dama.tahany.protocol.CallState
 import com.dama.tahany.protocol.TahanyMessage
-import com.dama.tahany.screencast.TahanyAccessibilityService
+import com.dama.tahany.screencast.ScreenCastSession
 import com.dama.tahany.screenshot.ScreenshotCandidate
 import com.dama.tahany.screenshot.ScreenshotLedger
 import com.dama.tahany.screenshot.ScreenshotLedgerStore
 import com.dama.tahany.screenshot.ScreenshotLoopGuard
 import com.dama.tahany.screenshot.ScreenshotWatcher
-import com.dama.tahany.util.FileNames
+import com.dama.tahany.util.toHex
 import com.dama.tahany.util.Hashing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import java.io.File
-import java.util.UUID
 
 class TahanyService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -58,12 +65,28 @@ class TahanyService : Service() {
     private lateinit var stager: OutgoingFileStager
     private lateinit var ledgerStore: ScreenshotLedgerStore
     private lateinit var ledger: ScreenshotLedger
+    private lateinit var albumStore: ScreenshotLedgerStore
+    private lateinit var albumLedger: ScreenshotLedger
+    private val albumLock = Mutex()
+    private val incomingLock = Mutex()
     private lateinit var loopGuard: ScreenshotLoopGuard
     private var callMonitor: CallMonitor? = null
     private lateinit var callCommandHandler: CallCommandHandler
+    private lateinit var screenCast: ScreenCastSession
+    private var projectionForeground = false
+    private var role: DeviceRole? = null
+    private var callState = CallState.IDLE
+
+    private fun refreshFeatures() {
+        watcher.refresh()
+        callMonitor?.start()
+    }
 
     inner class LocalBinder : android.os.Binder() {
         fun controller(): LinkController = link
+        fun setScreenSurface(surface: Surface?) = screenCast.setSurface(surface)
+        fun stopScreenCast() = screenCast.stop()
+        fun sendClipboard() = clipboard.sendNow()
     }
 
     override fun onCreate() {
@@ -78,20 +101,31 @@ class TahanyService : Service() {
         stager = OutgoingFileStager(this)
         ledgerStore = ScreenshotLedgerStore(this)
         ledger = ledgerStore.load()
+        albumStore = ScreenshotLedgerStore(this, "album_hashes")
+        albumLedger = albumStore.load()
         loopGuard = ScreenshotLoopGuard(ledger)
         watcher = ScreenshotWatcher(this, ::onScreenshotCandidate)
         callCommandHandler = CallCommandHandler(this)
 
-        if (!startForegroundCompat()) return
+        screenCast = ScreenCastSession(
+            link = link,
+            scope = scope,
+            projectionManager = getSystemService(MediaProjectionManager::class.java),
+            displaySize = ::displaySize,
+            densityDpi = { resources.displayMetrics.densityDpi },
+            setProjectionForeground = ::setProjectionForeground,
+        )
 
         clipboard.start()
         watcher.start()
 
         scope.launch {
             settings.settings.collect { current ->
-                if (current.role == DeviceRole.PHONE) {
+                role = current.role
+                if (role == DeviceRole.PHONE) {
                     if (callMonitor == null) {
                         callMonitor = CallMonitor(this@TahanyService) { callEvent ->
+                            callState = callEvent.state
                             link.sendCallEvent(callEvent)
                         }
                         callMonitor?.start()
@@ -104,7 +138,13 @@ class TahanyService : Service() {
         }
 
         scope.launch {
-            link.state.collect { state -> updateServiceNotification(state) }
+            link.state.collect { state ->
+                if (state.phase != LinkPhase.CONNECTED) {
+                    screenCast.clear()
+                    NotificationHelper.cancelCall(this@TahanyService)
+                }
+                updateServiceNotification(state)
+            }
         }
         scope.launch {
             link.events.collect { event -> handleLinkEvent(event) }
@@ -116,20 +156,25 @@ class TahanyService : Service() {
                 }
             }
         }
-        stager.cleanupOlderThan()
+        scope.launch(Dispatchers.IO) { stager.cleanupOlderThan() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!::link.isInitialized) return START_NOT_STICKY
+        if (!startForegroundCompat()) {
+            link.disconnect()
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_STOP -> {
+                link.disconnect()
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
             }
 
             ACTION_DISCONNECT -> link.disconnect()
             ACTION_SEND_CLIPBOARD -> clipboard.sendNow()
-            ACTION_SEND_TEXT -> link.sendClipboard(intent.getStringExtra(EXTRA_TEXT).orEmpty())
             ACTION_SEND_URIS -> sendUris(intent.uris())
             ACTION_COPY_TEXT -> copyText(intent.getStringExtra(EXTRA_TEXT))
             ACTION_SEND_NOTIFICATION_REPLY -> {
@@ -144,14 +189,10 @@ class TahanyService : Service() {
                 val action = runCatching { CallAction.valueOf(actionStr) }.getOrNull()
                 if (action != null) {
                     link.sendCallCommand(action)
-                    if (action == CallAction.SPEAKER_ON) link.updateSpeakerState(true)
-                    else if (action == CallAction.SPEAKER_OFF) link.updateSpeakerState(false)
                 }
             }
-            ACTION_REFRESH -> {
-                watcher.refresh()
-                startForegroundCompat()
-            }
+            ACTION_REFRESH -> refreshFeatures()
+            ACTION_START_SCREEN_CAST -> intent.projectionData()?.let(screenCast::startConsent)
 
             ACTION_START, null -> Unit
         }
@@ -162,6 +203,7 @@ class TahanyService : Service() {
 
     override fun onDestroy() {
         callMonitor?.stop()
+        screenCast.clear()
         if (activeServiceInstance === this) activeServiceInstance = null
         runCatching { watcher.stop() }
         runCatching { clipboard.stop() }
@@ -172,48 +214,43 @@ class TahanyService : Service() {
         super.onDestroy()
     }
 
+    private fun setProjectionForeground(enabled: Boolean): Boolean {
+        projectionForeground = enabled
+        return startForegroundCompat()
+    }
+
     private fun startForegroundCompat(): Boolean {
+        val state = link.state.value
         val notification = NotificationHelper.serviceNotification(
             this,
-            getString(R.string.notification_service_text),
-            connected = false,
+            if (projectionForeground) "Your screen is being shared." else getString(R.string.notification_service_text),
+            connected = state.phase == LinkPhase.CONNECTED,
         )
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ServiceCompat.startForeground(
-                    this,
-                    NotificationHelper.SERVICE_NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-                )
+        return runCatching {
+            val types = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                    (if (projectionForeground) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0)
             } else {
-                startForeground(NotificationHelper.SERVICE_NOTIFICATION_ID, notification)
+                0
             }
-            true
-        } catch (_: SecurityException) {
-            // On Android 14+ the connectedDevice type needs a granted Bluetooth
-            // runtime permission. Start untyped so the user can reach the app
-            // and grant it; ACTION_REFRESH upgrades the type afterwards.
-            try {
-                ServiceCompat.startForeground(
-                    this,
-                    NotificationHelper.SERVICE_NOTIFICATION_ID,
-                    notification,
-                    0,
-                )
-                true
-            } catch (_: Exception) {
-                stopSelf()
-                false
-            }
-        } catch (_: Exception) {
-            stopSelf()
-            false
+            ServiceCompat.startForeground(this, NotificationHelper.SERVICE_NOTIFICATION_ID, notification, types)
+        }.isSuccess.also { if (!it) projectionForeground = false }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun displaySize(): Size {
+        val windowManager = getSystemService(WindowManager::class.java)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            windowManager.maximumWindowMetrics.bounds.let { Size(it.width(), it.height()) }
+        } else {
+            val point = android.graphics.Point()
+            windowManager.defaultDisplay.getRealSize(point)
+            Size(point.x, point.y)
         }
     }
 
     private fun updateServiceNotification(state: LinkUiState) {
-        val text = when (state.phase) {
+        val text = if (projectionForeground) "Your screen is being shared." else when (state.phase) {
             LinkPhase.IDLE -> "Ready. Host or join a session."
             LinkPhase.ADVERTISING -> "Waiting for the other device to join…"
             LinkPhase.DISCOVERING -> "Looking for a Tahany device…"
@@ -240,44 +277,45 @@ class TahanyService : Service() {
                 return@launch
             }
             for (uri in uris) {
-                val staged = stager.stage(uri) ?: continue
+                if (!link.isConnected()) break
+                val staged = stager.stage(uri)
+                if (staged == null) {
+                    link.showMessage("Could not read one of the selected files.")
+                    continue
+                }
                 link.sendFile(staged.file, staged.mimeType)
-                delay(200L)
             }
         }
     }
 
     private fun onScreenshotCandidate(candidate: ScreenshotCandidate) {
         scope.launch(Dispatchers.IO) {
-            if (!settings.current().autoScreenshot || !link.isConnected()) return@launch
-            val sha = try {
-                contentResolver.openInputStream(candidate.uri)?.use { Hashing.sha256(it) }
-            } catch (_: Exception) {
-                null
-            } ?: return@launch
-            if (!loopGuard.claimOutgoing(candidate.relativePath, sha)) return@launch
-            ledgerStore.save(ledger)
-
-            val directory = File(cacheDir, "screenshots/${UUID.randomUUID()}").apply { mkdirs() }
-            val target = File(directory, FileNames.sanitize(candidate.displayName))
+            if (!settings.current().autoScreenshot) return@launch
+            val staged = stager.stage(candidate.uri) ?: return@launch
             try {
-                contentResolver.openInputStream(candidate.uri)?.use { input ->
-                    target.outputStream().use { output -> input.copyTo(output) }
-                } ?: throw IllegalStateException("No screenshot stream")
+                val sha = Hashing.sha256(staged.file)
+                saveScreenshotToAlbum(staged.file, staged.name, staged.mimeType, sha)
+                withContext(Dispatchers.Main) {
+                    if (!link.isConnected() || !loopGuard.claimOutgoing(candidate.relativePath, sha)) {
+                        return@withContext
+                    }
+                    try {
+                        val sent = link.sendFile(staged.file, staged.mimeType, candidate.dateAdded * 1000L, sha)
+                        if (!sent) loopGuard.rollback(sha)
+                        ledgerStore.save(ledger)
+                    } catch (cancelled: CancellationException) {
+                        loopGuard.rollback(sha)
+                        throw cancelled
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
-                loopGuard.rollback(sha)
-                ledgerStore.save(ledger)
-                target.delete()
-                return@launch
+                toast("Could not sync the new screenshot.")
+            } finally {
+                staged.file.delete()
+                staged.file.parentFile?.delete()
             }
-            link.sendScreenshot(
-                file = target,
-                name = candidate.displayName,
-                sha256 = sha,
-                size = target.length(),
-                takenAt = candidate.dateAdded * 1000L,
-            )
-            ledgerStore.save(ledger)
         }
     }
 
@@ -290,20 +328,13 @@ class TahanyService : Service() {
 
             is LinkEvent.FileReceived -> saveIncomingFile(event)
             is LinkEvent.ScreenshotReceived -> saveIncomingScreenshot(event)
-            is LinkEvent.Notice -> updateServiceNotification(link.state.value)
-            is LinkEvent.Problem -> toast(event.message)
-
             is LinkEvent.NotificationReceived -> {
                 NotificationHelper.notifyMirrored(this, event.event)
             }
 
             is LinkEvent.NotificationReplyReceived -> {
                 val ok = TahanyNotificationListenerService.dispatchReply(this, event.key, event.text)
-                if (ok) {
-                    toast("Sent reply.")
-                } else {
-                    toast("Could not send reply for ${event.key}.")
-                }
+                if (!ok) link.sendReplyFailure()
             }
 
             is LinkEvent.CallEventReceived -> {
@@ -319,100 +350,117 @@ class TahanyService : Service() {
             }
 
             is LinkEvent.CallCommandReceived -> {
-                callCommandHandler.execute(event.command.action)
+                val action = event.command.action
+                val allowed = if (action == CallAction.ANSWER) callState == CallState.RINGING
+                else callState != CallState.IDLE
+                link.sendCallResult(action, allowed && callCommandHandler.execute(action))
             }
 
-            is LinkEvent.ScreenCastOfferReceived -> {
-                link.sendScreenCastAnswer(true)
-                toast("Incoming screen stream.")
-            }
-
-            is LinkEvent.ScreenCastAnswerReceived -> {
-                if (event.answer.accepted) {
-                    toast("Screen sharing accepted by tablet.")
-                } else {
-                    toast("Screen sharing declined: ${event.answer.reason ?: "cancelled"}")
-                }
-            }
-
-            is LinkEvent.ScreenCastStopReceived -> {
-                toast("Screen sharing stopped.")
-            }
-
-            is LinkEvent.TouchEventReceived -> {
-                TahanyAccessibilityService.injectTouch(event.touch)
-            }
+            is LinkEvent.ScreenCastOfferReceived -> screenCast.acceptOffer()
+            is LinkEvent.ScreenCastAnswerReceived -> screenCast.onAnswer(event.answer.accepted)
+            LinkEvent.ScreenCastStopReceived -> screenCast.clear()
+            is LinkEvent.ScreenStreamReceived -> screenCast.receive(event.stream)
+            is LinkEvent.TouchEventReceived -> screenCast.dispatchTouch(event.touch)
         }
     }
 
     private fun saveIncomingFile(event: LinkEvent.FileReceived) {
-        scope.launch(Dispatchers.IO) {
-            val offer = event.offer
-            val computed = runCatching { Hashing.sha256(event.file) }.getOrNull()
-            if (computed == null) {
-                link.sendFileResult(offer?.transferId, false, null, "Could not read the received file")
-                event.file.delete()
-                return@launch
+        val offer = event.offer
+        saveIncoming(event.uri, offer.name, offer.mimeType, offer.size, offer.sha256,
+            offer.transferId, event.session, isScreenshot = false)
+    }
+
+    private fun saveIncomingScreenshot(event: LinkEvent.ScreenshotReceived) {
+        val notice = event.notice
+        saveIncoming(event.uri, notice.name, "", notice.size, notice.sha256,
+            notice.transferId, event.session, isScreenshot = true)
+    }
+
+    private fun saveIncoming(
+        uri: Uri,
+        name: String,
+        mimeType: String,
+        size: Long,
+        sha256: String,
+        transferId: String,
+        sourceSession: Int,
+        isScreenshot: Boolean,
+    ) {
+        scope.launch {
+            val result = incomingLock.withLock {
+                withContext(Dispatchers.IO) {
+                    var staged: File? = null
+                    var claimed = false
+                    try {
+                        require(size in 0..MAX_TRANSFER_BYTES && sha256.matches(SHA256_PATTERN))
+                        val target = File.createTempFile("incoming-", ".tmp", cacheDir).also { staged = it }
+                        val digest = java.security.MessageDigest.getInstance("SHA-256")
+                        val source = if (uri.scheme == "file") File(checkNotNull(uri.path)).inputStream()
+                        else checkNotNull(contentResolver.openInputStream(uri))
+                        var count = 0L
+                        source.use { input ->
+                            target.outputStream().use { output ->
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read < 0) break
+                                    count += read
+                                    check(count <= size) { "Size mismatch." }
+                                    digest.update(buffer, 0, read)
+                                    output.write(buffer, 0, read)
+                                }
+                            }
+                        }
+                        check(count == size) { "Size mismatch." }
+                        check(digest.digest().toHex().equals(sha256, ignoreCase = true)) {
+                            "Checksum mismatch."
+                        }
+                        if (isScreenshot) {
+                            claimed = loopGuard.claimIncoming(sha256.lowercase())
+                            if (!claimed) return@withContext Result.success(null)
+                        }
+                        val saved = if (isScreenshot) {
+                            saveScreenshotToAlbum(target, name, mimeType, sha256.lowercase())
+                        } else {
+                            incomingStore.save(target, name, mimeType)
+                        }
+                        if (claimed) ledgerStore.save(ledger)
+                        Result.success(saved)
+                    } catch (cancelled: CancellationException) {
+                        if (claimed) loopGuard.rollback(sha256.lowercase())
+                        throw cancelled
+                    } catch (_: Exception) {
+                        if (claimed) loopGuard.rollback(sha256.lowercase())
+                        Result.failure(IllegalStateException("Could not verify or save the received file."))
+                    } finally {
+                        staged?.delete()
+                        link.deleteIncomingFile(uri)
+                    }
+                }
             }
-            if (offer?.sha256 != null && !offer.sha256.equals(computed, ignoreCase = true)) {
-                link.sendFileResult(offer.transferId, false, null, "Checksum mismatch")
-                event.file.delete()
-                toast("Rejected ${offer.name}: checksum mismatch.")
-                return@launch
-            }
-            if (offer != null && offer.size > 0 && event.size != offer.size) {
-                link.sendFileResult(offer.transferId, false, null, "Size mismatch")
-                event.file.delete()
-                toast("Rejected ${offer.name}: incomplete transfer.")
-                return@launch
-            }
-            try {
-                val saved = incomingStore.save(
-                    file = event.file,
-                    requestedName = offer?.name ?: event.file.name,
-                    mimeType = offer?.mimeType ?: "application/octet-stream",
-                )
-                link.sendFileResult(offer?.transferId, true, saved.displayName, null)
+            val saved = result.getOrNull()
+            link.recordIncoming(sourceSession, transferId, name, size, result.exceptionOrNull()?.message)
+            link.sendFileResult(transferId, sourceSession, saved?.displayName, result.exceptionOrNull()?.message)
+            if (saved != null) {
                 NotificationHelper.notifyIncoming(this@TahanyService, saved)
                 toast("Saved ${saved.displayName}.")
-            } catch (error: Exception) {
-                link.sendFileResult(offer?.transferId, false, null, error.message)
+            } else if (result.isFailure) {
                 toast("Could not save the received file.")
-            } finally {
-                event.file.delete()
             }
         }
     }
 
-    private fun saveIncomingScreenshot(event: LinkEvent.ScreenshotReceived) {
-        scope.launch(Dispatchers.IO) {
-            val computed = runCatching { Hashing.sha256(event.file) }.getOrNull()
-            if (computed == null || !computed.equals(event.sha256, ignoreCase = true)) {
-                loopGuard.rollback(event.sha256)
-                event.file.delete()
-                toast("Rejected a screenshot: checksum mismatch.")
-                return@launch
-            }
-            if (!loopGuard.claimIncoming(event.sha256)) {
-                event.file.delete()
-                return@launch
-            }
-            try {
-                val saved = incomingStore.save(
-                    file = event.file,
-                    requestedName = event.name,
-                    mimeType = "image/*",
-                )
-                ledgerStore.save(ledger)
-                NotificationHelper.notifyIncoming(this@TahanyService, saved)
-                toast("Screenshot saved to Pictures/Tahany.")
-            } catch (_: Exception) {
-                loopGuard.rollback(event.sha256)
-                toast("Could not save the received screenshot.")
-            } finally {
-                event.file.delete()
-            }
-        }
+    private suspend fun saveScreenshotToAlbum(
+        file: File,
+        name: String,
+        mimeType: String,
+        hash: String,
+    ) = albumLock.withLock {
+        if (albumLedger.contains(hash)) return@withLock null
+        val saved = incomingStore.save(file, name, mimeType)
+        albumLedger.tryAdd(hash)
+        albumStore.save(albumLedger)
+        saved
     }
 
     private fun copyText(text: String?) {
@@ -430,12 +478,22 @@ class TahanyService : Service() {
     private fun Intent.uris(): List<Uri> =
         getParcelableArrayListExtra<Uri>(EXTRA_URIS).orEmpty()
 
+    @Suppress("DEPRECATION")
+    private fun Intent.projectionData(): Intent? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(EXTRA_PROJECTION_DATA, Intent::class.java)
+        } else {
+            getParcelableExtra(EXTRA_PROJECTION_DATA)
+        }
+
     companion object {
+        private val SHA256_PATTERN = Regex("[0-9a-fA-F]{64}")
+        const val ACTION_START_SCREEN_CAST = "com.dama.tahany.action.START_SCREEN_CAST"
+        const val EXTRA_PROJECTION_DATA = "com.dama.tahany.extra.PROJECTION_DATA"
         const val ACTION_START = "com.dama.tahany.action.START"
         const val ACTION_STOP = "com.dama.tahany.action.STOP"
         const val ACTION_DISCONNECT = "com.dama.tahany.action.DISCONNECT"
         const val ACTION_SEND_CLIPBOARD = "com.dama.tahany.action.SEND_CLIPBOARD"
-        const val ACTION_SEND_TEXT = "com.dama.tahany.action.SEND_TEXT"
         const val ACTION_SEND_URIS = "com.dama.tahany.action.SEND_URIS"
         const val ACTION_COPY_TEXT = "com.dama.tahany.action.COPY_TEXT"
         const val ACTION_REFRESH = "com.dama.tahany.action.REFRESH"

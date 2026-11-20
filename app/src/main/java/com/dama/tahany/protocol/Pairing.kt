@@ -10,10 +10,8 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * A short authentication string (SAS), not a password.
  *
- * Both devices mix both app-scoped device IDs and both fresh nonces. A relay
- * or man-in-the-middle sees different material on each leg and therefore
- * shows a different six-digit code; the user compares the two screens before
- * either side accepts. The proof binds the confirmation to that same material.
+ * The displayed code binds the app handshake to the Nearby session token.
+ * Both users compare the code before either app exposes its data.
  */
 object PairingCode {
     const val DIGITS = 6
@@ -29,7 +27,7 @@ object PairingCode {
 
     fun decodeNonce(value: String): ByteArray? =
         try {
-            Base64.getUrlDecoder().decode(value)
+            Base64.getUrlDecoder().decode(value).takeIf { it.size == 16 }
         } catch (_: IllegalArgumentException) {
             null
         }
@@ -39,8 +37,10 @@ object PairingCode {
         remoteDeviceId: String,
         localNonce: ByteArray,
         remoteNonce: ByteArray,
+        channelToken: ByteArray? = null,
     ): String {
-        val material = material(localDeviceId, remoteDeviceId, localNonce, remoteNonce)
+        val transcript = material(localDeviceId, remoteDeviceId, localNonce, remoteNonce)
+        val material = if (channelToken == null) transcript else transcript + channelToken
         val digest = hmac(SAS_DOMAIN.toByteArray(Charsets.UTF_8), material)
         var value = 0L
         for (index in 0 until 8) {

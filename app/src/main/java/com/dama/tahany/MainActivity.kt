@@ -8,8 +8,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.core.content.ContextCompat
-import com.dama.tahany.service.TahanyService
 import com.dama.tahany.ui.TahanyScreen
 import com.dama.tahany.ui.TahanyViewModel
 import com.dama.tahany.ui.theme.TahanyTheme
@@ -36,25 +34,21 @@ class MainActivity : ComponentActivity() {
 
     private fun handleShareIntent(intent: Intent?) {
         if (intent == null) return
-        when (intent.action) {
-            Intent.ACTION_SEND -> {
-                val uris = mutableListOf<Uri>()
-                streamUri(intent)?.let(uris::add)
-                if (uris.isNotEmpty()) {
-                    viewModel.sendUris(uris)
-                } else {
-                    val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
-                    if (!text.isNullOrBlank()) sendText(text)
-                }
-                intent.action = null
+        val uris = runCatching {
+            when (intent.action) {
+                Intent.ACTION_SEND -> listOfNotNull(streamUri(intent))
+                Intent.ACTION_SEND_MULTIPLE -> streamUris(intent)
+                else -> return
             }
-
-            Intent.ACTION_SEND_MULTIPLE -> {
-                val uris = streamUris(intent)
-                if (uris.isNotEmpty()) viewModel.sendUris(uris)
-                intent.action = null
-            }
+        }.getOrDefault(emptyList())
+        val text = if (intent.action == Intent.ACTION_SEND && uris.isEmpty()) {
+            intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.take(16_000)?.toString()
+        } else {
+            null
         }
+        val shareable = uris.filter { it.scheme == "content" && it.authority != "${packageName}.files" }
+        viewModel.reviewIncomingShare(shareable.take(100), text)
+        intent.action = null
     }
 
     @Suppress("DEPRECATION")
@@ -72,15 +66,4 @@ class MainActivity : ComponentActivity() {
         } else {
             intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
         }
-
-    private fun sendText(text: String) {
-        val intent = Intent(this, TahanyService::class.java)
-            .setAction(TahanyService.ACTION_SEND_TEXT)
-            .putExtra(TahanyService.EXTRA_TEXT, text)
-        try {
-            ContextCompat.startForegroundService(this, intent)
-        } catch (_: Exception) {
-            // The link state will explain that the service is unavailable.
-        }
-    }
 }

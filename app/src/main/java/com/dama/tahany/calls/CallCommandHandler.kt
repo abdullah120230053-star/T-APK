@@ -18,7 +18,6 @@ class CallCommandHandler(private val context: Context) {
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
     fun execute(action: CallAction): Boolean {
-        Log.d(TAG, "Executing call command: $action")
         return when (action) {
             CallAction.ANSWER -> answerCall()
             CallAction.DECLINE -> declineCall()
@@ -28,23 +27,14 @@ class CallCommandHandler(private val context: Context) {
     }
 
     private fun answerCall(): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.ANSWER_PHONE_CALLS)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                Log.w(TAG, "ANSWER_PHONE_CALLS permission not granted")
-                return false
-            }
-            return try {
-                @Suppress("DEPRECATION")
-                telecomManager?.acceptRingingCall()
-                true
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to accept call", e)
-                false
-            }
-        }
-        return false
+        val telecom = telecomManager ?: return false
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ANSWER_PHONE_CALLS)
+            != PackageManager.PERMISSION_GRANTED
+        ) return false
+        return runCatching {
+            @Suppress("DEPRECATION")
+            telecom.acceptRingingCall()
+        }.isSuccess
     }
 
     private fun declineCall(): Boolean {
@@ -67,13 +57,12 @@ class CallCommandHandler(private val context: Context) {
     }
 
     private fun setSpeaker(on: Boolean): Boolean {
-        return try {
-            audioManager?.isSpeakerphoneOn = on
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to toggle speakerphone", e)
-            false
-        }
+        val audio = audioManager ?: return false
+        @Suppress("DEPRECATION")
+        return runCatching {
+            audio.isSpeakerphoneOn = on
+            audio.isSpeakerphoneOn == on
+        }.getOrDefault(false)
     }
 
     companion object {

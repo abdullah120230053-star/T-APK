@@ -26,8 +26,8 @@ class SettingsRepository(private val context: Context) {
         val ROLE = stringPreferencesKey("role")
         val DEVICE_ID = stringPreferencesKey("device_id")
         val DEVICE_NAME = stringPreferencesKey("device_name")
+        val SETUP_COMPLETE = booleanPreferencesKey("setup_complete")
         val AUTO_SCREENSHOT = booleanPreferencesKey("auto_screenshot")
-        val WIFI_ONLY = booleanPreferencesKey("wifi_only")
         val TRUSTED_PEERS = stringSetPreferencesKey("trusted_peers")
         val BLOCKED_PACKAGES = stringSetPreferencesKey("blocked_packages")
     }
@@ -68,16 +68,16 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    suspend fun completeSetup() {
+        context.tahanyDataStore.edit { it[Keys.SETUP_COMPLETE] = true }
+    }
+
     suspend fun setRole(role: DeviceRole) {
         context.tahanyDataStore.edit { it[Keys.ROLE] = role.name }
     }
 
     suspend fun setAutoScreenshot(enabled: Boolean) {
         context.tahanyDataStore.edit { it[Keys.AUTO_SCREENSHOT] = enabled }
-    }
-
-    suspend fun setWifiOnly(enabled: Boolean) {
-        context.tahanyDataStore.edit { it[Keys.WIFI_ONLY] = enabled }
     }
 
     suspend fun setDeviceName(name: String) {
@@ -88,8 +88,8 @@ class SettingsRepository(private val context: Context) {
     suspend fun trustPeer(peer: TrustedPeer) {
         context.tahanyDataStore.edit { preferences ->
             val peers = readPeers(preferences)
-            val encoded = TrustedPeerCodec.encode(peer)
-            preferences[Keys.TRUSTED_PEERS] = (peers + encoded).toSet()
+                .filterNot { TrustedPeerCodec.decode(it)?.deviceId == peer.deviceId }
+            preferences[Keys.TRUSTED_PEERS] = (peers + TrustedPeerCodec.encode(peer)).toSet()
         }
     }
 
@@ -100,8 +100,6 @@ class SettingsRepository(private val context: Context) {
                 .toSet()
         }
     }
-
-    suspend fun isTrusted(deviceId: String): Boolean = current().trustedPeers.any { it.deviceId == deviceId }
 
     suspend fun setPackageBlocked(packageName: String, blocked: Boolean) {
         context.tahanyDataStore.edit { preferences ->
@@ -120,8 +118,8 @@ class SettingsRepository(private val context: Context) {
         role = preferences[Keys.ROLE]?.let { runCatching { DeviceRole.valueOf(it) }.getOrNull() },
         deviceId = preferences[Keys.DEVICE_ID].orEmpty(),
         deviceName = preferences[Keys.DEVICE_NAME].orEmpty(),
+        setupComplete = preferences[Keys.SETUP_COMPLETE] ?: false,
         autoScreenshot = preferences[Keys.AUTO_SCREENSHOT] ?: true,
-        wifiOnly = preferences[Keys.WIFI_ONLY] ?: false,
         trustedPeers = readPeers(preferences).mapNotNull(TrustedPeerCodec::decode),
         blockedPackages = preferences[Keys.BLOCKED_PACKAGES] ?: DEFAULT_BLOCKED_PACKAGES,
     )

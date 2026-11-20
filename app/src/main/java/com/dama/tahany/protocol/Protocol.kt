@@ -8,7 +8,9 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import java.util.UUID
 
-const val PROTOCOL_VERSION = 1
+const val PROTOCOL_VERSION = 2
+const val TOUCH_TAP = 0
+const val TOUCH_SWIPE = 1
 const val MAX_CONTROL_MESSAGE_BYTES = 32 * 1024
 
 @Serializable
@@ -72,13 +74,6 @@ sealed class TahanyMessage {
     ) : TahanyMessage()
 
     @Serializable
-    @SerialName("pair_accepted")
-    data class PairAccepted(
-        override val v: Int = PROTOCOL_VERSION,
-        override val id: String = newMessageId(),
-    ) : TahanyMessage()
-
-    @Serializable
     @SerialName("pair_rejected")
     data class PairRejected(
         override val v: Int = PROTOCOL_VERSION,
@@ -104,7 +99,8 @@ sealed class TahanyMessage {
         val name: String,
         val mimeType: String,
         val size: Long,
-        val sha256: String? = null,
+        val sha256: String,
+        val payloadId: Long,
     ) : TahanyMessage()
 
     @Serializable
@@ -127,6 +123,8 @@ sealed class TahanyMessage {
         val name: String,
         val size: Long,
         val takenAt: Long,
+        val payloadId: Long,
+        val transferId: String,
     ) : TahanyMessage()
 
     @Serializable
@@ -182,6 +180,15 @@ sealed class TahanyMessage {
     ) : TahanyMessage()
 
     @Serializable
+    @SerialName("call_result")
+    data class CallResult(
+        override val v: Int = PROTOCOL_VERSION,
+        override val id: String = newMessageId(),
+        val action: CallAction,
+        val succeeded: Boolean,
+    ) : TahanyMessage()
+
+    @Serializable
     @SerialName("screencast_offer")
     data class ScreenCastOffer(
         override val v: Int = PROTOCOL_VERSION,
@@ -217,6 +224,8 @@ sealed class TahanyMessage {
         val xRatio: Float,
         val yRatio: Float,
         val action: Int,
+        val endXRatio: Float = xRatio,
+        val endYRatio: Float = yRatio,
     ) : TahanyMessage()
 
     @Serializable

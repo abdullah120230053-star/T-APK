@@ -2,76 +2,84 @@ package com.dama.tahany.screencast
 
 import android.media.MediaCodec
 import android.media.MediaFormat
-import android.util.Log
 import android.view.Surface
-import java.nio.ByteBuffer
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
+import java.io.DataInputStream
 
-/**
- * Decodes incoming H.264 video packets on the Tablet (Honor Pad X9a) and renders to a Surface.
- */
-class ScreenCastReceiver(
-    private val surface: Surface,
-    private val width: Int = 1280,
-    private val height: Int = 720,
-) {
-    private var decoder: MediaCodec? = null
-    @Volatile
-    private var isConfigured = false
+internal class ScreenCastReceiver {
+    @Volatile var surface: Surface? = null
 
-    fun start() {
-        if (isConfigured) return
+    suspend fun decode(width: Int, height: Int, input: DataInputStream) {
+        var currentSurface: Surface? = null
+        var codec: MediaCodec? = null
+        var config: ByteArray? = null
+        var needsKeyFrame = true
+        val outputInfo = MediaCodec.BufferInfo()
         try {
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height)
-            val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            codec.configure(format, surface, null, 0)
-            codec.start()
-            decoder = codec
-            isConfigured = true
-            Log.d(TAG, "Screen cast receiver initialized with Surface: ${width}x$height")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize decoder", e)
-            stop()
-        }
-    }
+            while (currentCoroutineContext().isActive) {
+                val size = input.readInt()
+                require(size in 1..MAX_FRAME_BYTES) { "Invalid screen frame size." }
+                val pts = input.readLong()
+                val flags = input.readInt() and FRAME_FLAGS
+                val bytes = ByteArray(size).also(input::readFully)
+                if (flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                    config = bytes
+                    continue
+                }
 
-    fun feedPacket(packet: ByteArray, presentationTimeUs: Long = System.nanoTime() / 1000) {
-        val codec = decoder ?: return
-        if (!isConfigured) return
+                val target = surface?.takeIf { it.isValid }
+                if (target !== currentSurface) {
+                    codec?.release()
+                    codec = null
+                    currentSurface = target
+                    needsKeyFrame = true
+                }
+                if (target == null) continue
 
-        try {
-            val inputIndex = codec.dequeueInputBuffer(10_000L)
-            if (inputIndex >= 0) {
-                val inputBuffer: ByteBuffer? = codec.getInputBuffer(inputIndex)
-                if (inputBuffer != null) {
-                    inputBuffer.clear()
-                    inputBuffer.put(packet)
-                    codec.queueInputBuffer(inputIndex, 0, packet.size, presentationTimeUs, 0)
+                if (needsKeyFrame && flags and MediaCodec.BUFFER_FLAG_KEY_FRAME == 0) continue
+                if (codec == null) {
+                    val decoder = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                    codec = decoder
+                    val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height)
+                    decoder.configure(format, target, null, 0)
+                    decoder.start()
+                    config?.let { queue(decoder, it, 0L, MediaCodec.BUFFER_FLAG_CODEC_CONFIG) }
+                }
+                try {
+                    drain(codec, outputInfo)
+                    if (queue(codec, bytes, pts, flags)) needsKeyFrame = false
+                    else needsKeyFrame = true
+                    drain(codec, outputInfo)
+                } catch (error: IllegalStateException) {
+                    if (surface === target && target.isValid) throw error
+                    codec.release()
+                    codec = null
+                    currentSurface = null
+                    needsKeyFrame = true
                 }
             }
-
-            val bufferInfo = MediaCodec.BufferInfo()
-            var outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0L)
-            while (outputIndex >= 0) {
-                // Render directly to surface
-                codec.releaseOutputBuffer(outputIndex, true)
-                outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0L)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error decoding frame", e)
+        } finally {
+            codec?.release()
         }
     }
 
-    fun stop() {
-        isConfigured = false
-        try {
-            decoder?.stop()
-            decoder?.release()
-            decoder = null
-        } catch (_: Exception) {}
-        Log.d(TAG, "Screen cast receiver stopped")
+    private fun queue(codec: MediaCodec, bytes: ByteArray, pts: Long, flags: Int): Boolean {
+        val index = codec.dequeueInputBuffer(10_000L)
+        if (index < 0) return false
+        val buffer = checkNotNull(codec.getInputBuffer(index))
+        require(bytes.size <= buffer.capacity()) { "Screen frame exceeds decoder capacity." }
+        buffer.clear()
+        buffer.put(bytes)
+        codec.queueInputBuffer(index, 0, bytes.size, pts, flags)
+        return true
     }
 
-    companion object {
-        private const val TAG = "ScreenCastReceiver"
+    private fun drain(codec: MediaCodec, info: MediaCodec.BufferInfo) {
+        var index = codec.dequeueOutputBuffer(info, 0)
+        while (index >= 0) {
+            codec.releaseOutputBuffer(index, true)
+            index = codec.dequeueOutputBuffer(info, 0)
+        }
     }
 }

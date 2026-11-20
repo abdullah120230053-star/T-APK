@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.Manifest.permission
 import androidx.core.content.ContextCompat
 import com.dama.tahany.model.DeviceRole
 
@@ -65,7 +66,7 @@ object PermissionCatalog {
                 PermissionItem(
                     Manifest.permission.READ_MEDIA_IMAGES,
                     "Photos",
-                    "Detect new screenshots and save the ones you receive.",
+                    "Allow all photos to automatically detect new screenshots.",
                 ),
             )
         } else {
@@ -129,14 +130,23 @@ object PermissionCatalog {
     fun missing(context: Context, role: DeviceRole? = null, api: Int = Build.VERSION.SDK_INT): List<PermissionItem> =
         items(role, api).filterNot { context.has(it.permission) }
 
-    fun hasAll(context: Context, role: DeviceRole? = null, api: Int = Build.VERSION.SDK_INT): Boolean =
-        missing(context, role, api).isEmpty()
+    fun isForLink(item: PermissionItem): Boolean = item.permission in linkPermissions
 
-    fun roleHint(role: DeviceRole?): String = when (role) {
-        DeviceRole.PHONE -> "Phone mode: the phone keeps the link, notifications, and calls."
-        DeviceRole.TABLET -> "Tablet mode: the tablet shows files, screenshots, and the phone screen."
-        null -> "Choose a role first."
-    }
+    fun request(items: List<PermissionItem>): Array<String> = buildList {
+        items.mapTo(this, PermissionItem::permission)
+        if (permission.ACCESS_FINE_LOCATION in this) add(permission.ACCESS_COARSE_LOCATION)
+        if (Build.VERSION.SDK_INT >= 34 && permission.READ_MEDIA_IMAGES in this) {
+            add(permission.READ_MEDIA_VISUAL_USER_SELECTED)
+        }
+    }.toTypedArray()
+
+    private val linkPermissions = setOf(
+        permission.BLUETOOTH_SCAN,
+        permission.BLUETOOTH_ADVERTISE,
+        permission.BLUETOOTH_CONNECT,
+        permission.NEARBY_WIFI_DEVICES,
+        permission.ACCESS_FINE_LOCATION,
+    )
 }
 
 private fun Context.has(permission: String): Boolean =

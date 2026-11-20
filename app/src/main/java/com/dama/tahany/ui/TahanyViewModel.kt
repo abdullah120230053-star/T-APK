@@ -7,7 +7,11 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.net.Uri
 import android.os.IBinder
+import android.view.Surface
+import com.dama.tahany.link.LinkController
+import com.dama.tahany.protocol.CallAction
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dama.tahany.data.SettingsRepository
@@ -26,9 +30,21 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class TahanyViewModel(application: Application) : AndroidViewModel(application) {
+class TahanyViewModel(
+    application: Application,
+    private val savedStateHandle: SavedStateHandle,
+) : AndroidViewModel(application) {
+    val pendingShare = savedStateHandle.getStateFlow<Intent?>("pending_share", null)
+    val shareDeferred = savedStateHandle.getStateFlow("share_deferred", false)
+
+    fun deferShare() {
+        savedStateHandle["share_deferred"] = true
+    }
     private val settingsRepository = SettingsRepository(application)
-    private val controller = MutableStateFlow<com.dama.tahany.link.LinkController?>(null)
+    private val controller = MutableStateFlow<LinkController?>(null)
+    private var serviceBinder: LocalBinder? = null
+    private val ready = MutableStateFlow(false)
+    val serviceReady: StateFlow<Boolean> = ready
 
     val settings: StateFlow<AppSettings?> = settingsRepository.settings.stateIn(
         viewModelScope,
@@ -43,11 +59,15 @@ class TahanyViewModel(application: Application) : AndroidViewModel(application) 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as? LocalBinder ?: return
+            serviceBinder = binder
             controller.value = binder.controller()
+            ready.value = true
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            serviceBinder = null
             controller.value = null
+            ready.value = false
         }
     }
 
@@ -68,15 +88,22 @@ class TahanyViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectRole(role: DeviceRole) {
-        viewModelScope.launch { settingsRepository.setRole(role) }
+        viewModelScope.launch {
+            if (settings.value?.role != role) controller.value?.disconnect()
+            settingsRepository.setRole(role)
+        }
+    }
+
+    fun completeSetup() {
+        viewModelScope.launch { settingsRepository.completeSetup() }
+    }
+
+    fun setPackageBlocked(packageName: String, blocked: Boolean) {
+        viewModelScope.launch { settingsRepository.setPackageBlocked(packageName, blocked) }
     }
 
     fun setAutoScreenshot(enabled: Boolean) {
         viewModelScope.launch { settingsRepository.setAutoScreenshot(enabled) }
-    }
-
-    fun setWifiOnly(enabled: Boolean) {
-        viewModelScope.launch { settingsRepository.setWifiOnly(enabled) }
     }
 
     fun forgetPeer(deviceId: String) {
@@ -104,34 +131,67 @@ class TahanyViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun answerCall() {
-        controller.value?.sendCallCommand(com.dama.tahany.protocol.CallAction.ANSWER)
+        controller.value?.sendCallCommand(CallAction.ANSWER)
     }
 
     fun declineCall() {
-        controller.value?.sendCallCommand(com.dama.tahany.protocol.CallAction.DECLINE)
+        controller.value?.sendCallCommand(CallAction.DECLINE)
     }
 
     fun toggleSpeaker() {
         val currentSpeaker = linkState.value.activeCall?.isSpeakerOn ?: false
-        val nextAction = if (currentSpeaker) com.dama.tahany.protocol.CallAction.SPEAKER_OFF else com.dama.tahany.protocol.CallAction.SPEAKER_ON
-        controller.value?.sendCallCommand(nextAction)
-        controller.value?.updateSpeakerState(!currentSpeaker)
+        val action = if (currentSpeaker) {
+            CallAction.SPEAKER_OFF
+        } else {
+            CallAction.SPEAKER_ON
+        }
+        controller.value?.sendCallCommand(action)
     }
 
     fun replyNotification(key: String, text: String) {
         controller.value?.sendNotificationReply(key, text)
     }
 
-    fun startScreenCast(width: Int = 1280, height: Int = 720) {
-        controller.value?.sendScreenCastOffer(width, height)
+    fun startScreenCast(data: Intent) {
+        val app = getApplication<Application>()
+        val intent = Intent(app, TahanyService::class.java)
+            .setAction(TahanyService.ACTION_START_SCREEN_CAST)
+            .putExtra(TahanyService.EXTRA_PROJECTION_DATA, data)
+        runCatching { ContextCompat.startForegroundService(app, intent) }.onFailure {
+            controller.value?.showMessage("Android could not start screen capture.")
+        }
     }
 
-    fun stopScreenCast() {
-        controller.value?.sendScreenCastStop()
+    fun stopScreenCast() = serviceBinder?.stopScreenCast() ?: Unit
+
+    fun setScreenSurface(surface: Surface?) {
+        serviceBinder?.setScreenSurface(surface)
+    }
+
+    fun sendScreenTouch(x: Float, y: Float, endX: Float, endY: Float, action: Int) {
+        controller.value?.sendTouchEvent(x, y, endX, endY, action)
     }
 
     fun sendClipboard() {
-        controller.value?.sendClipboard(readClipboard() ?: "")
+        serviceBinder?.sendClipboard()
+    }
+
+    fun reviewIncomingShare(uris: List<Uri>, text: String?) {
+        if (uris.isEmpty() && text.isNullOrBlank()) return
+        savedStateHandle["share_deferred"] = false
+        savedStateHandle["pending_share"] = Intent()
+            .putParcelableArrayListExtra(TahanyService.EXTRA_URIS, ArrayList(uris))
+            .putExtra(TahanyService.EXTRA_TEXT, text)
+    }
+
+    @Suppress("DEPRECATION")
+    fun finishShare(approved: Boolean) {
+        val share = pendingShare.value ?: return
+        savedStateHandle["pending_share"] = null
+        if (!approved || controller.value?.isConnected() != true) return
+        val uris = share.getParcelableArrayListExtra<Uri>(TahanyService.EXTRA_URIS).orEmpty()
+        if (uris.isNotEmpty()) sendUris(uris)
+        else controller.value?.sendClipboard(share.getStringExtra(TahanyService.EXTRA_TEXT).orEmpty())
     }
 
     fun sendUris(uris: List<Uri>) {
@@ -157,14 +217,6 @@ class TahanyViewModel(application: Application) : AndroidViewModel(application) 
         } catch (_: Exception) {
             // Ignore; the watcher will also react to the next MediaStore change.
         }
-    }
-
-    private fun readClipboard(): String? {
-        val app = getApplication<Application>()
-        val manager = app.getSystemService(android.content.ClipboardManager::class.java) ?: return null
-        val clip = manager.primaryClip ?: return null
-        if (clip.itemCount == 0) return null
-        return clip.getItemAt(0).coerceToText(app)?.toString()?.takeIf { it.isNotBlank() }
     }
 
     override fun onCleared() {

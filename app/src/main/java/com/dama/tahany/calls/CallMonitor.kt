@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package com.dama.tahany.calls
 
 import android.Manifest
@@ -25,18 +27,25 @@ class CallMonitor(
     private val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
     private var callback: Any? = null
     private var isRegistered = false
+    private var withCallerId = false
 
     fun start() {
-        if (isRegistered || telephonyManager == null) return
+        if (telephonyManager == null) return
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
             != PackageManager.PERMISSION_GRANTED
         ) {
-            Log.w(TAG, "READ_PHONE_STATE not granted; cannot monitor calls")
+            stop()
             return
         }
 
+        val callerId = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) ==
+            PackageManager.PERMISSION_GRANTED
+        if (isRegistered && callerId == withCallerId) return
+        stop()
+        withCallerId = callerId
+
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !callerId) {
                 val telephonyCallback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
                     override fun onCallStateChanged(state: Int) {
                         handleState(state, null)
@@ -66,7 +75,7 @@ class CallMonitor(
     fun stop() {
         if (!isRegistered || telephonyManager == null) return
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !withCallerId) {
                 (callback as? TelephonyCallback)?.let { telephonyManager.unregisterTelephonyCallback(it) }
             } else {
                 @Suppress("DEPRECATION")
@@ -90,13 +99,14 @@ class CallMonitor(
             else -> return
         }
 
-        val contactName = if (callState == CallState.RINGING && !phoneNumber.isNullOrBlank()) {
-            lookupContactName(phoneNumber)
+        val number = phoneNumber?.takeIf { it.isNotBlank() }
+        val contactName = if (callState == CallState.RINGING && number != null) {
+            lookupContactName(number)
         } else null
 
         val event = TahanyMessage.CallEvent(
             state = callState,
-            number = phoneNumber,
+            number = number,
             contactName = contactName,
             timestamp = System.currentTimeMillis(),
         )

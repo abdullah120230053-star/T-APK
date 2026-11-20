@@ -7,13 +7,13 @@ import android.content.Intent
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import android.util.Log
 import com.dama.tahany.data.SettingsRepository
 import com.dama.tahany.protocol.TahanyMessage
 import com.dama.tahany.service.TahanyService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap
  * PendingIntent.
  */
 class TahanyNotificationListenerService : NotificationListenerService() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var settings: SettingsRepository
 
     override fun onCreate() {
@@ -36,6 +36,8 @@ class TahanyNotificationListenerService : NotificationListenerService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        scope.cancel()
+        replyActions.clear()
         if (activeInstance === this) activeInstance = null
     }
 
@@ -47,6 +49,9 @@ class TahanyNotificationListenerService : NotificationListenerService() {
         if (pkg == packageName) return
 
         val notification = sbn.notification ?: return
+        if (notification.visibility == Notification.VISIBILITY_SECRET ||
+            notification.flags and Notification.FLAG_GROUP_SUMMARY != 0
+        ) return
         val flags = notification.flags
         val isOngoing = (flags and Notification.FLAG_ONGOING_EVENT) != 0
 
@@ -75,7 +80,7 @@ class TahanyNotificationListenerService : NotificationListenerService() {
             var replyAction: Notification.Action? = null
             if (actions != null) {
                 for (action in actions) {
-                    if (!action.remoteInputs.isNullOrEmpty()) {
+                    if (action.remoteInputs?.any { it.allowFreeFormInput } == true) {
                         replyAction = action
                         break
                     }
@@ -83,16 +88,18 @@ class TahanyNotificationListenerService : NotificationListenerService() {
             }
 
             val key = sbn.key
+            replyActions.remove(key)
             if (replyAction != null) {
-                replyActions[key] = CachedAction(replyAction, sbn.postTime)
+                if (replyActions.size >= 200) replyActions.keys.firstOrNull()?.let(replyActions::remove)
+                replyActions[key] = replyAction
             }
 
             val event = TahanyMessage.NotificationEvent(
                 key = key,
                 packageName = pkg,
                 appLabel = appLabel,
-                title = title,
-                text = text,
+                title = title.take(240),
+                text = text.take(2_000),
                 postedAt = sbn.postTime,
                 hasReply = replyAction != null,
                 canOpen = notification.contentIntent != null,
@@ -109,37 +116,28 @@ class TahanyNotificationListenerService : NotificationListenerService() {
     }
 
     companion object {
-        private const val TAG = "TahanyNotification"
         private var activeInstance: TahanyNotificationListenerService? = null
 
-        private data class CachedAction(
-            val action: Notification.Action,
-            val timestamp: Long,
-        )
-
-        private val replyActions = ConcurrentHashMap<String, CachedAction>()
+        private val replyActions = ConcurrentHashMap<String, Notification.Action>()
 
         fun isConnected(): Boolean = activeInstance != null
 
         fun dispatchReply(context: Context, key: String, replyText: String): Boolean {
-            val cached = replyActions[key] ?: return false
-            val action = cached.action
+            val action = replyActions[key] ?: return false
             val remoteInputs = action.remoteInputs ?: return false
             if (remoteInputs.isEmpty()) return false
 
             val intent = Intent()
             val bundle = Bundle()
             for (ri in remoteInputs) {
-                bundle.putCharSequence(ri.resultKey, replyText)
+                if (ri.allowFreeFormInput) bundle.putCharSequence(ri.resultKey, replyText)
             }
             RemoteInput.addResultsToIntent(remoteInputs, intent, bundle)
 
             return try {
                 action.actionIntent.send(context, 0, intent)
-                Log.d(TAG, "Dispatched remote reply for notification key: $key")
                 true
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to send reply for key $key", e)
+            } catch (_: Exception) {
                 false
             }
         }

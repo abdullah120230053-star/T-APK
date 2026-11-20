@@ -111,7 +111,7 @@ data class AppSettings(
     val deviceId: String = "",
     val deviceName: String = "",
     val autoScreenshot: Boolean = true,
-    val wifiOnly: Boolean = false,
+    val setupComplete: Boolean = false,
     val trustedPeers: List<TrustedPeer> = emptyList(),
     val blockedPackages: Set<String> = emptySet(),
 )
