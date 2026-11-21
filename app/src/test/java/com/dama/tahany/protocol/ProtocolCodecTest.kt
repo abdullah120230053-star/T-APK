@@ -164,7 +164,19 @@ class ProtocolCodecTest {
     }
 
     @Test
-    fun pairingCodeDependsOnNearbySession() {
+    fun pairingRevealMustMatchCommittedNonce() {
+        val nonce = PairingCode.newNonce()
+        val different = nonce.clone().apply { this[0] = (this[0].toInt() xor 1).toByte() }
+        val commitment = PairingCode.commitNonce(nonce)
+        val reveal = TahanyMessage.PairReveal(nonce = PairingCode.encodeNonce(nonce))
+
+        assertEquals(reveal, ProtocolCodec.decode(ProtocolCodec.encode(reveal)))
+        assertTrue(PairingCode.matchesCommitment(nonce, commitment))
+        assertTrue(!PairingCode.matchesCommitment(different, commitment))
+    }
+
+    @Test
+    fun pairingCodeDependsOnHostCertificate() {
         val first = ByteArray(16) { 1 }
         val second = ByteArray(16) { 2 }
         val channel = byteArrayOf(10, 20, 30)

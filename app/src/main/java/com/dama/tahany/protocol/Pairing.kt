@@ -10,7 +10,7 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * A short authentication string (SAS), not a password.
  *
- * The displayed code binds the app handshake to the Nearby session token.
+ * The displayed code binds the app handshake to the TLS host certificate fingerprint.
  * Both users compare the code before either app exposes its data.
  */
 object PairingCode {
@@ -31,6 +31,12 @@ object PairingCode {
         } catch (_: IllegalArgumentException) {
             null
         }
+
+    fun commitNonce(nonce: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(nonce).toHex()
+
+    fun matchesCommitment(nonce: ByteArray, commitment: String): Boolean =
+        MessageDigest.isEqual(commitNonce(nonce).toByteArray(), commitment.toByteArray())
 
     fun derive(
         localDeviceId: String,

@@ -14,6 +14,6 @@ $adbPath = if ($adb) {
 if (-not (Test-Path -LiteralPath $adbPath -PathType Leaf)) {
     throw 'Install Android platform-tools and add adb.exe to PATH.'
 }
-$apk = Join-Path $PSScriptRoot 'Tahany-0.2.1-debug.apk'
+$apk = Join-Path $PSScriptRoot 'Tahany-0.3.0-debug.apk'
 & $adbPath -s $Serial install -r $apk
 if ($LASTEXITCODE -ne 0) { throw "ADB install failed for $Serial." }

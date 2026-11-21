@@ -8,7 +8,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import java.util.UUID
 
-const val PROTOCOL_VERSION = 2
+const val PROTOCOL_VERSION = 3
 const val TOUCH_TAP = 0
 const val TOUCH_SWIPE = 1
 const val MAX_CONTROL_MESSAGE_BYTES = 32 * 1024
@@ -62,6 +62,14 @@ sealed class TahanyMessage {
         val role: DeviceRole,
         val nonce: String,
         val appVersion: String,
+    ) : TahanyMessage()
+
+    @Serializable
+    @SerialName("pair_reveal")
+    data class PairReveal(
+        override val v: Int = PROTOCOL_VERSION,
+        override val id: String = newMessageId(),
+        val nonce: String,
     ) : TahanyMessage()
 
     /** Sent after the user says both six-digit codes match. */

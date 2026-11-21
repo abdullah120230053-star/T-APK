@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import android.Manifest.permission
 import androidx.core.content.ContextCompat
 import com.dama.tahany.model.DeviceRole
 
@@ -24,37 +23,7 @@ data class PermissionItem(
  */
 object PermissionCatalog {
     fun items(role: DeviceRole? = null, api: Int = Build.VERSION.SDK_INT): List<PermissionItem> = buildList {
-        if (api >= 31) {
-            add(
-                PermissionItem(
-                    Manifest.permission.BLUETOOTH_SCAN,
-                    "Nearby devices",
-                    "Find the other device over Bluetooth.",
-                ),
-            )
-            add(
-                PermissionItem(
-                    Manifest.permission.BLUETOOTH_ADVERTISE,
-                    "Be discoverable",
-                    "Let the other device find this one.",
-                ),
-            )
-            add(
-                PermissionItem(
-                    Manifest.permission.BLUETOOTH_CONNECT,
-                    "Bluetooth connection",
-                    "Open the encrypted link between the two devices.",
-                ),
-            )
-        }
         if (api >= 33) {
-            add(
-                PermissionItem(
-                    Manifest.permission.NEARBY_WIFI_DEVICES,
-                    "Nearby Wi-Fi",
-                    "Use direct Wi-Fi for faster file and screen transfer.",
-                ),
-            )
             add(
                 PermissionItem(
                     Manifest.permission.POST_NOTIFICATIONS,
@@ -70,13 +39,6 @@ object PermissionCatalog {
                 ),
             )
         } else {
-            add(
-                PermissionItem(
-                    if (api >= 29) permission.ACCESS_FINE_LOCATION else permission.ACCESS_COARSE_LOCATION,
-                    "Location",
-                    "Android 12 and below require location for nearby discovery.",
-                ),
-            )
             add(
                 PermissionItem(
                     Manifest.permission.READ_EXTERNAL_STORAGE,
@@ -130,24 +92,12 @@ object PermissionCatalog {
     fun missing(context: Context, role: DeviceRole? = null, api: Int = Build.VERSION.SDK_INT): List<PermissionItem> =
         items(role, api).filterNot { context.has(it.permission) }
 
-    fun isForLink(item: PermissionItem): Boolean = item.permission in linkPermissions
-
     fun request(items: List<PermissionItem>): Array<String> = buildList {
         items.mapTo(this, PermissionItem::permission)
-        if (permission.ACCESS_FINE_LOCATION in this) add(permission.ACCESS_COARSE_LOCATION)
-        if (Build.VERSION.SDK_INT >= 34 && permission.READ_MEDIA_IMAGES in this) {
-            add(permission.READ_MEDIA_VISUAL_USER_SELECTED)
+        if (Build.VERSION.SDK_INT >= 34 && Manifest.permission.READ_MEDIA_IMAGES in this) {
+            add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
         }
     }.toTypedArray()
-
-    private val linkPermissions = setOf(
-        permission.BLUETOOTH_SCAN,
-        permission.BLUETOOTH_ADVERTISE,
-        permission.BLUETOOTH_CONNECT,
-        permission.NEARBY_WIFI_DEVICES,
-        permission.ACCESS_FINE_LOCATION,
-        permission.ACCESS_COARSE_LOCATION,
-    )
 }
 
 private fun Context.has(permission: String): Boolean =

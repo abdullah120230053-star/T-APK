@@ -24,8 +24,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dama.tahany.model.LinkPhase
 import com.dama.tahany.permissions.PermissionCatalog
-import com.google.android.gms.common.ConnectionResult
-import com.google.android.gms.common.GoogleApiAvailability
 
 @Composable
 fun TahanyScreen(viewModel: TahanyViewModel) {
@@ -62,7 +60,6 @@ fun TahanyScreen(viewModel: TahanyViewModel) {
         PermissionCatalog.missing(context, settings?.role)
     }
 
-    val missingLink = remember(missing) { missing.filter(PermissionCatalog::isForLink) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) {
@@ -70,9 +67,6 @@ fun TahanyScreen(viewModel: TahanyViewModel) {
         permissionRefresh += 1
     }
 
-    val nearbyAvailable = remember(permissionRefresh) {
-        GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) == ConnectionResult.SUCCESS
-    }
     val current = settings
     if (current == null) {
         LoadingScreen()
@@ -80,7 +74,7 @@ fun TahanyScreen(viewModel: TahanyViewModel) {
     }
 
     val connected = link.phase == LinkPhase.CONNECTED
-    if (share != null && current.role != null && (connected || current.setupComplete && !shareDeferred)) {
+    if (share != null && current.role != null && (connected || !shareDeferred)) {
         AlertDialog(
             onDismissRequest = { viewModel.finishShare(false) },
             title = { Text("Send to the other device?") },
@@ -102,22 +96,11 @@ fun TahanyScreen(viewModel: TahanyViewModel) {
 
     when {
         current.role == null -> RoleScreen(onSelect = viewModel::selectRole)
-        missingLink.isNotEmpty() && !current.setupComplete -> PermissionsScreen(
-            missing = missingLink,
-            onGrant = { permissionLauncher.launch(PermissionCatalog.request(missingLink)) },
-            onSkip = viewModel::completeSetup,
-        )
-
         else -> HomeScreen(
             settings = current,
             link = link,
             missingPermissions = missing,
-            canPair = missingLink.isEmpty(),
-            onGrantLinkPermissions = {
-                permissionLauncher.launch(PermissionCatalog.request(missingLink))
-            },
             onSetPackageBlocked = viewModel::setPackageBlocked,
-            nearbyAvailable = nearbyAvailable,
             serviceReady = serviceReady,
             onChangeRole = viewModel::selectRole,
             onHost = viewModel::host,
@@ -128,8 +111,7 @@ fun TahanyScreen(viewModel: TahanyViewModel) {
             onSendClipboard = viewModel::sendClipboard,
             onSendFile = { uri -> viewModel.sendUris(listOf(uri)) },
             onRequestPermission = { item ->
-                val related = if (PermissionCatalog.isForLink(item)) missingLink else listOf(item)
-                permissionLauncher.launch(PermissionCatalog.request(related))
+                permissionLauncher.launch(PermissionCatalog.request(listOf(item)))
             },
             onRefresh = {
                 viewModel.refreshPermissions()

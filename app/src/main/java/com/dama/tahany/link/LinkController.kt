@@ -6,7 +6,6 @@ import java.io.InputStream
 import com.dama.tahany.data.SettingsRepository
 import com.dama.tahany.model.ActiveCallState
 import com.dama.tahany.model.DeviceRole
-import com.dama.tahany.model.FoundPeer
 import com.dama.tahany.model.LinkPhase
 import com.dama.tahany.model.LinkUiState
 import com.dama.tahany.model.MirroredNotification
@@ -26,7 +25,6 @@ import com.dama.tahany.protocol.ProtocolException
 import com.dama.tahany.protocol.TahanyMessage
 import com.dama.tahany.util.FileNames
 import com.dama.tahany.util.Hashing
-import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
@@ -97,7 +95,7 @@ class LinkController(
     private val _events = MutableSharedFlow<LinkEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<LinkEvent> = _events.asSharedFlow()
 
-    private val transport = NearbyTransport(context) { event ->
+    private val transport = WifiTransport(context, scope) { event ->
         scope.launch { handleTransport(event) }
     }
 
@@ -105,6 +103,7 @@ class LinkController(
     private var endpointId: String? = null
     private var localNonce: ByteArray? = null
     private var remoteNonce: ByteArray? = null
+    private var remoteCommitment: String? = null
     private var remote: PeerInfo? = null
     private var sas: String? = null
     private var isHost = false
@@ -135,6 +134,7 @@ class LinkController(
     fun join() = begin(asHost = false)
 
     fun connect(endpointId: String, name: String) {
+        if (state.value.phase != LinkPhase.DISCOVERING) return
         if (identity?.role == null) {
             _state.update { it.copy(phase = LinkPhase.ERROR, lastError = "Choose Phone or Tablet first.") }
             return
@@ -148,7 +148,7 @@ class LinkController(
                 message = "Connecting to $name…",
             )
         }
-        withMain { transport.connect(endpointId, advertisementName(identity?.name.orEmpty())) }
+        withMain { transport.connect(endpointId) }
         armHandshakeTimeout()
     }
 
@@ -372,34 +372,17 @@ class LinkController(
             _state.update {
                 it.copy(
                     phase = if (asHost) LinkPhase.ADVERTISING else LinkPhase.DISCOVERING,
-                    message = if (asHost) "Visible as ${current.deviceName}" else "Looking for a Tahany device…",
+                    message = if (asHost) "Starting a Wi-Fi host…" else null,
                 )
             }
-            withMain {
-                if (asHost) {
-                    transport.advertise(advertisementName(current.deviceName))
-                } else {
-                    transport.discover()
-                }
-            }
+            if (asHost) withMain { transport.advertise() }
         }
     }
 
     private suspend fun handleTransport(event: TransportEvent) {
         when (event) {
-            is TransportEvent.PeerFound -> {
-                if (state.value.phase != LinkPhase.DISCOVERING) return
-                _state.update { state ->
-                    if (state.foundPeers.any { it.endpointId == event.endpointId }) {
-                        state
-                    } else {
-                        state.copy(foundPeers = state.foundPeers + FoundPeer(event.endpointId, event.name))
-                    }
-                }
-            }
-
-            is TransportEvent.PeerLost -> _state.update { state ->
-                state.copy(foundPeers = state.foundPeers.filterNot { it.endpointId == event.endpointId })
+            is TransportEvent.Hosting -> _state.update {
+                it.copy(hostAddress = event.address, message = "Enter this address on the joining device.")
             }
 
             is TransportEvent.ConnectionInitiated -> {
@@ -455,15 +438,16 @@ class LinkController(
             ProtocolCodec.decode(bytes)
         } catch (_: ProtocolException) {
             if (state.value.phase == LinkPhase.HANDSHAKE) {
-                endSession("Pairing failed. Install the same Tahany version on both devices.")
+                endSession("Pairing failed. Install the Wi-Fi version of Tahany on both devices.")
             }
             return
         }
         if (!isConnected()) {
             if (state.value.phase != LinkPhase.HANDSHAKE) return
             when (message) {
-                is TahanyMessage.Hello -> if (!isHost && sas == null) onHello(message)
+                is TahanyMessage.Hello -> if (!isHost && remoteCommitment == null) onHello(message)
                 is TahanyMessage.HelloAck -> if (isHost && sas == null) onHelloAck(message)
+                is TahanyMessage.PairReveal -> if (!isHost && sas == null) onPairReveal(message)
                 is TahanyMessage.PairConfirm -> onPairConfirm(message)
                 is TahanyMessage.PairRejected -> endSession("The other device declined pairing.")
                 else -> Unit
@@ -472,7 +456,7 @@ class LinkController(
         }
         when (message) {
             is TahanyMessage.Hello, is TahanyMessage.HelloAck, is TahanyMessage.PairConfirm,
-            is TahanyMessage.PairRejected -> Unit
+            is TahanyMessage.PairRejected, is TahanyMessage.PairReveal -> Unit
             is TahanyMessage.ClipboardUpdate -> emit(LinkEvent.ClipboardReceived(message.text, message.timestamp))
             is TahanyMessage.FileOffer -> acceptMetadata(message.payloadId, message)
             is TahanyMessage.ScreenshotNotice -> acceptMetadata(message.payloadId, message)
@@ -580,19 +564,34 @@ class LinkController(
         }
     }
 
+    // Commit before receiving the joiner's nonce. Neither side can choose
+    // its nonce after seeing the other nonce and grind for a matching code.
     private fun onHello(message: TahanyMessage.Hello) {
-        val nonce = PairingCode.decodeNonce(message.nonce) ?: return
-        remote = PeerInfo(message.deviceId, message.deviceName, message.role)
-        remoteNonce = nonce
-        if (!isHost) {
-            sendHelloAck()
-            deriveSas()
+        if (message.nonce.length != 64) {
+            endSession("Invalid Wi-Fi pairing commitment.")
+            return
         }
+        remoteCommitment = message.nonce
+        remote = PeerInfo(message.deviceId, message.deviceName, message.role)
+        sendHelloAck()
     }
 
     private fun onHelloAck(message: TahanyMessage.HelloAck) {
         val nonce = PairingCode.decodeNonce(message.nonce) ?: return
+        val local = localNonce ?: return
         remote = PeerInfo(message.deviceId, message.deviceName, message.role)
+        remoteNonce = nonce
+        send(TahanyMessage.PairReveal(nonce = PairingCode.encodeNonce(local)))
+        deriveSas()
+    }
+
+    private fun onPairReveal(message: TahanyMessage.PairReveal) {
+        val nonce = PairingCode.decodeNonce(message.nonce) ?: return
+        val commitment = remoteCommitment ?: return
+        if (!PairingCode.matchesCommitment(nonce, commitment)) {
+            endSession("The Wi-Fi pairing code could not be verified.")
+            return
+        }
         remoteNonce = nonce
         deriveSas()
     }
@@ -642,6 +641,7 @@ class LinkController(
     }
 
     private fun markConnected() {
+        transport.authorize(endpointId ?: return)
         handshakeTimeout?.cancel()
         _state.update {
             it.copy(
@@ -697,13 +697,13 @@ class LinkController(
     fun deleteIncomingFile(uri: Uri) = transport.deleteIncomingFile(uri)
 
     private fun handleTransferProgress(event: TransportEvent.TransferProgress) {
-        val transferId = event.transferId ?: return
+        val transferId = event.transferId
         if (activeTransfer?.first != transferId || state.value.transfer?.id != transferId) return
         when (event.status) {
-            PayloadTransferUpdate.Status.IN_PROGRESS, PayloadTransferUpdate.Status.SUCCESS -> _state.update { current ->
+            TransferProgressStatus.IN_PROGRESS -> _state.update { current ->
                 current.copy(transfer = current.transfer?.copy(bytesTransferred = event.bytesTransferred))
             }
-            PayloadTransferUpdate.Status.FAILURE, PayloadTransferUpdate.Status.CANCELED ->
+            TransferProgressStatus.FAILURE ->
                 finishOutgoing(transferId, false, "Transfer did not complete.")
         }
     }
@@ -747,7 +747,7 @@ class LinkController(
                 deviceId = local.deviceId,
                 deviceName = local.name,
                 role = local.role,
-                nonce = PairingCode.encodeNonce(nonce),
+                nonce = PairingCode.commitNonce(nonce),
                 appVersion = PROTOCOL_VERSION.toString(),
             ),
         )
@@ -800,6 +800,7 @@ class LinkController(
         remote = null
         localNonce = null
         remoteNonce = null
+        remoteCommitment = null
         sas = null
         confirmationSent = false
         remoteConfirmed = false
@@ -811,9 +812,6 @@ class LinkController(
         completedFiles.clear()
         _state.value = LinkUiState(phase = phase)
     }
-
-    private fun advertisementName(name: String): String =
-        "Tahany | ${name.take(40)}".take(80)
 
     private fun emit(event: LinkEvent) {
         _events.tryEmit(event)

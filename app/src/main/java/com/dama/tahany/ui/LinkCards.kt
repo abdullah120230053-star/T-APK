@@ -19,6 +19,12 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,32 +46,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.dama.tahany.model.FoundPeer
 import com.dama.tahany.model.LinkPhase
 import com.dama.tahany.model.LinkUiState
 import com.dama.tahany.model.TransferDirection
 import com.dama.tahany.model.TransferState
 import com.dama.tahany.model.TransferStatus
-
-@Composable
-internal fun MissingPermissionsCard(onGrant: () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-    ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.Warning, contentDescription = null)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text("Nearby access needed", fontWeight = FontWeight.SemiBold)
-                Text(
-                    "Allow access to pair these devices.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            TextButton(onClick = onGrant) { Text("Grant") }
-        }
-    }
-}
 
 @Composable
 internal fun LinkCard(
@@ -125,32 +110,32 @@ internal fun LinkCard(
                 }
 
                 LinkPhase.ADVERTISING -> {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                    Text(
-                        "Waiting for the other device. Keep this screen open for the first pairing.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    link.hostAddress?.let { address ->
+                        SelectionContainer {
+                            Text(address, style = MaterialTheme.typography.headlineSmall, fontFamily = FontFamily.Monospace)
+                        }
+                    } ?: LinearProgressIndicator(Modifier.fillMaxWidth())
                     TextButton(onClick = onDisconnect) { Text("Stop hosting") }
                 }
 
                 LinkPhase.DISCOVERING -> {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                    if (link.foundPeers.isEmpty()) {
-                        Text(
-                            "Looking for a host on this Wi-Fi or Bluetooth…",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    } else {
-                        Text(
-                            "Choose the other device:",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        link.foundPeers.forEach { peer ->
-                            FoundPeerRow(peer, onConnect)
-                        }
+                    var address by rememberSaveable { mutableStateOf("") }
+                    val endpoint = address.trim()
+                    OutlinedTextField(
+                        value = address,
+                        onValueChange = { address = it.take(32) },
+                        label = { Text("Host address") },
+                        placeholder = { Text("192.168.1.20:54321") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { onConnect(endpoint, "host") },
+                            enabled = endpoint.count { it == '.' } == 3 && ':' in endpoint,
+                        ) { Text("Connect") }
+                        TextButton(onClick = onDisconnect) { Text("Cancel") }
                     }
-                    TextButton(onClick = onDisconnect) { Text("Stop searching") }
                 }
 
                 LinkPhase.HANDSHAKE -> {
@@ -216,23 +201,6 @@ internal fun LinkCard(
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun FoundPeerRow(peer: FoundPeer, onConnect: (String, String) -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onConnect(peer.endpointId, peer.name) },
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.Phone, contentDescription = null)
-            Spacer(Modifier.width(10.dp))
-            Text(peer.name, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("Connect", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -328,7 +296,7 @@ private fun StatusDot(phase: LinkPhase) {
 private fun phaseTitle(phase: LinkPhase): String = when (phase) {
     LinkPhase.IDLE -> "Not connected"
     LinkPhase.ADVERTISING -> "Hosting"
-    LinkPhase.DISCOVERING -> "Searching"
+    LinkPhase.DISCOVERING -> "Join over Wi-Fi"
     LinkPhase.HANDSHAKE -> "Confirm the code"
     LinkPhase.CONNECTED -> "Connected"
     LinkPhase.ERROR -> "Link stopped"
@@ -336,8 +304,8 @@ private fun phaseTitle(phase: LinkPhase): String = when (phase) {
 
 private fun phaseSubtitle(link: LinkUiState): String = when (link.phase) {
     LinkPhase.IDLE -> "Host on one device and join from the other."
-    LinkPhase.ADVERTISING -> "Visible to the other device."
-    LinkPhase.DISCOVERING -> "Looking for a host."
+    LinkPhase.ADVERTISING -> "Starting Wi-Fi host."
+    LinkPhase.DISCOVERING -> "Enter the address shown on the hosting device."
     LinkPhase.HANDSHAKE -> "The encrypted channel is open; confirm the code."
     LinkPhase.CONNECTED -> "Files, clipboard, and screenshots can move now."
     LinkPhase.ERROR -> "Reconnect when both devices are ready."

@@ -1,5 +1,7 @@
 # Tahany — build tasks and release gates
 
+**Wi-Fi update.** Starting with 0.3.0, Tahany uses a direct TLS connection on the same Wi-Fi subnet. For the current network acceptance gate, turn Bluetooth off, host on one device, enter the host address and port on the other, and compare the pairing code. The Nearby implementation notes below describe the earlier releases. The two-device feature and screen-off checks still apply.
+
 Status: **Tahany 0.2.0 is ready for hardware acceptance. Gates T0.2, T1.20, T2.5, T3.5 and T4.5 remain open.**
 
 Tahany is one APK with two roles. The same code runs on the Honor Pad X9a

@@ -59,7 +59,6 @@ import com.dama.tahany.model.AppSettings
 import com.dama.tahany.model.DeviceRole
 import com.dama.tahany.model.LinkPhase
 import com.dama.tahany.model.LinkUiState
-import com.dama.tahany.permissions.PermissionCatalog
 import com.dama.tahany.permissions.PermissionItem
 import com.dama.tahany.protocol.CallState
 
@@ -71,10 +70,7 @@ internal fun HomeScreen(
     settings: AppSettings,
     link: LinkUiState,
     missingPermissions: List<PermissionItem>,
-    canPair: Boolean,
-    onGrantLinkPermissions: () -> Unit,
     onSetPackageBlocked: (String, Boolean) -> Unit,
-    nearbyAvailable: Boolean,
     serviceReady: Boolean,
     onChangeRole: (DeviceRole) -> Unit,
     onHost: () -> Unit,
@@ -177,26 +173,15 @@ internal fun HomeScreen(
                                     DeviceIllustration(
                                         Modifier.fillMaxWidth(),
                                         "Pair your devices",
-                                        "Open Tahany on your phone and tablet.",
+                                        "Connect both devices to the same Wi-Fi.",
                                         compact = true,
                                     )
                                 }
                             }
-                            if (!nearbyAvailable) {
-                                item {
-                                    MessageCard(
-                                        "Google Play services required",
-                                        "Update or enable Google Play services on this device to use Nearby Connections.",
-                                    )
-                                }
-                            }
-                            if (!canPair && !connected && nearbyAvailable) {
-                                item { MissingPermissionsCard(onGrantLinkPermissions) }
-                            }
                             item {
                                 LinkCard(
                                     link, onHost, onJoin, onConnect, onConfirm, onDisconnect,
-                                    canPair = nearbyAvailable && serviceReady && canPair,
+                                    canPair = serviceReady,
                                 )
                             }
                             if (connected) {
@@ -263,7 +248,7 @@ private fun PermissionsCard(
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Permissions", style = MaterialTheme.typography.titleMedium)
-            missing.filterNot(PermissionCatalog::isForLink).forEach { item ->
+            missing.forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(item.title, style = MaterialTheme.typography.bodyLarge)

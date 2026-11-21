@@ -17,11 +17,6 @@ enum class LinkPhase {
     ERROR,
 }
 
-data class FoundPeer(
-    val endpointId: String,
-    val name: String,
-)
-
 data class TrustedPeer(
     val deviceId: String,
     val name: String,
@@ -97,7 +92,7 @@ data class LinkUiState(
     val sas: String? = null,
     val awaitingConfirmation: Boolean = false,
     val trusted: Boolean = false,
-    val foundPeers: List<FoundPeer> = emptyList(),
+    val hostAddress: String? = null,
     val transfer: TransferState? = null,
     val lastError: String? = null,
     val message: String? = null,

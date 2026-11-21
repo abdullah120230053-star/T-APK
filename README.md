@@ -1,6 +1,6 @@
 # Tahany
 
-Tahany connects an Honor Pad X9a and a Redmi phone over an encrypted local Nearby Connections session. Install the same APK on both devices, choose **Phone** on the Redmi and **Tablet** on the Honor Pad, then **Host** on one and **Join** on the other. Compare the six-digit code on both screens whenever you connect.
+Tahany connects an Honor Pad X9a and a Redmi phone over encrypted Wi-Fi. Install the same APK on both, choose **Phone** on the Redmi and **Tablet** on the Honor Pad, then tap **Host** on one device. On the other, tap **Join** and enter the host address, including the port. Compare the six-digit code on both screens before confirming.
 
 ## Features
 
@@ -24,11 +24,11 @@ On the project Windows machine, `.\gradw.bat` uses the preinstalled Gradle distr
 
 ## Hardware acceptance
 
-Google Play services must be enabled on both devices. Nearby chooses the transport. On Android versions that restrict clipboard reads, open Tahany and use **Clipboard** to send manually. The Quick Settings tile opens the app.
+Both devices need an IPv4 address on the same Wi-Fi subnet. Bluetooth and Google Play services can stay off. Guest networks can prevent connected devices from reaching one another. On Android versions that restrict clipboard reads, open Tahany and use **Clipboard** to send manually. The Quick Settings tile opens the app.
 
 Check [TASKS.md](TASKS.md) for the real-device gates, including background operation, transfers over Wi-Fi and hotspot, call controls, notifications, and sustained screen mirroring. Release builds require the project owner's Android signing key.
 
-Tahany uses public Android APIs and has no Tahany account, cloud relay, or analytics service. Pairing uses the Nearby session authentication token to bind the compared code. [Nearby Connections data exchange](https://developers.google.com/nearby/connections/android/exchange-data) · [Android media projection](https://developer.android.com/media/grow/media-projection)
+Tahany uses public Android APIs and has no Tahany account, cloud relay, or analytics service. Wi-Fi pairing binds the compared code to the TLS host certificate and requires confirmation on both devices before sharing. [Android media projection](https://developer.android.com/media/grow/media-projection)
 
 ## HONOR Connect feature coverage
 
